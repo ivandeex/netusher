@@ -1,0 +1,102 @@
+#!/usr/bin/perl
+use POSIX qw(mktime);
+use strict;
+
+my $root = "/var/uis/db";
+my $deadwd = 300;
+my $secret = "sEcRet";
+
+print "Content-Type: text/html; charset=ISO-8859-1\n\n";
+
+$ENV{QUERY_STRING} = "i=a&u=b&t=t&h=c" unless defined $ENV{QUERY_STRING};
+
+unless ($ENV{QUERY_STRING} =~ /^i=([^&]+)&u=([^&]+)&t=([^&]+)&h=([^&]+)$/) {
+	print "ERROR not iuh\n";
+	exit;
+}
+my ($ifs, $usrs, $rept, $hash) = ($1, $2, $3, $4);
+
+my $h = 0;
+for (split //, "$ifs$usrs$rept$secret") { $h += ord($_) };
+if ($hash ne $h) {
+	print "ERROR cs\n";
+	exit;
+}
+
+$usrs = "-" if $usrs =~ /^\s*$/;
+if ($usrs =~ /[=\s]/) {
+	print "ERROR eqs\n";
+	exit;
+}
+
+sub t2s ($) {
+	@_ = localtime($_[0]);
+	return sprintf '%04d-%02d-%02d %02d:%02d:%02d',
+					$_[5]+1900,$_[4]+1,$_[3],$_[2],$_[1],$_[0];
+}
+
+sub s2t ($) {
+	$_ = $_[0];
+	return /^(\d\d\d\d)\-(\d\d)\-(\d\d) (\d\d)\:(\d\d)\:(\d\d)\s*/
+		? mktime($6, $5, $4, $3, $2-1, $1-1900, undef, undef, (localtime)[8])
+		: undef;
+}
+
+my $now = time;
+
+for my $if (split /,/, $ifs) {
+	my @r;
+	if (open(IF, "$root/$if")) {
+		chomp;
+		while(<IF>) {
+			next unless /^(\d\d\d\d\-\d\d\-\d\d \d\d\:\d\d\:\d\d) (\=|\+) ([\w,]+)\s+$/;
+			push @r, { t => s2t($1), m => $2, u => $3 };
+		}
+		close IF;
+	}
+	if ($#r < 0) {
+		push @r, { t => $now, m => '=', u => $usrs };
+	} else {
+		my $c = $r[$#r];
+		if ($now - $c->{t} > $deadwd) {
+			my $t = $usrs eq '-' ? $now : $c->{t} + $deadwd;
+			if ($c->{m} eq '+') {
+				$c->{t} = $t;
+				$c->{m} = '=';
+				$c->{u} = '-';
+			} else {
+				push @r, { t => $t, m => '=', u => '-' };
+			}
+			if ($usrs ne '-') {
+				push @r, { t => $now, m => '=', u => $usrs };
+			}
+		} else {
+			if ($c->{u} eq $usrs) {
+				if ($c->{m} eq '+') {
+					$c->{t} = $now;
+				} else {
+					push @r, { t => $now, m => '+', u => $usrs };
+				}
+			} else {
+				if ($c->{m} eq '+') {
+					$c->{t} = $now;
+					$c->{m} = '=';
+					$c->{u} = $usrs;
+				} else {
+					push @r, { t => $now, m => '=', u => $usrs };
+				}
+			}
+		}
+	}
+	if (open(IF, "> $root/$if")) {
+		for my $c (@r) {
+			print IF sprintf "%s %s %-36s\n", t2s($c->{t}), $c->{m}, $c->{u};
+		}
+		close IF;
+	} else {
+		print "ERROR wr $if\n";
+	}
+	last;
+}
+print "OK\n";
+
