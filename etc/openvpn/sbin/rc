@@ -39,10 +39,7 @@ BASENAME=$(basename $0)
 if [ x${BASENAME#cron-} != x${BASENAME} ]; then
     # running from cron
     # the name should be: cron-ACTION-NETWORK-CLIENT
-    RC_METHOD=cron
-    RC_ACTION=$(echo $BASENAME | cut -d- -f2)
-    RC_NETWORK=$(echo $BASENAME | cut -d- -f3)
-    RC_CLIENT=$(echo $BASENAME | cut -d- -f4)
+    read RC_METHOD RC_ACTION RC_NETWORK RC_CLIENT <<< ${BASENAME//-/ }
     RC_IP=0.0.0.0
 fi
 
@@ -57,8 +54,7 @@ if [ x${BASENAME#client-} != x${BASENAME} ]; then
       *)  RC_ACTION="" ;;
     esac
 
-    RC_NETWORK=$(echo $config | cut -d. -f1 | cut -d- -f1)
-
+    RC_NETWORK=${config//[.-]*/}
     RC_CLIENT=${common_name#client-}
     RC_IP="$untrusted_ip"
 fi
@@ -96,7 +92,7 @@ while read RC_SCRIPT; do
     [ -r $RC_SCRIPT -a -x $RC_SCRIPT ] || continue
 
     # script name should be: NN-ACTION-NETWORK-SUBSYSTEM[.EXT]
-    RC_SUBSYS=$(echo $RC_SCRIPT | cut -d- -f4- | cut -d. -f1)
+    RC_SUBSYS=$(cut -d- -f4- <<< ${RC_SCRIPT%%.*})
     [ -z "$RC_SUBSYS" ] && continue
 
     # disable subsystem if etc/SUBSYS.off exists
