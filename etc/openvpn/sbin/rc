@@ -33,34 +33,45 @@ if [ ! -d $RC_BIN -o ! -d $RC_VAR -o ! -d $RC_ETC ]; then
     exit 1
 fi
 
-# deduce action
-RC_ACTION=$(basename $0)
-RC_ACTION=${RC_ACTION#client-}
+# main parameters
+BASENAME=$(basename $0)
 
-case "$RC_ACTION" in
-  connect|up)
-    RC_ACTION=up
-    ;;
-  disconnect|down)
-    RC_ACTION=down
-    ;;
-  *)
-    echo "$RC_ACTION: invalid action" 1>&2
+if [ x${BASENAME#cron-} != x${BASENAME} ]; then
+    # running from cron
+    # the name should be: cron-ACTION-NETWORK-CLIENT
+    RC_METHOD=cron
+    RC_ACTION=$(echo $BASENAME | cut -d- -f2)
+    RC_NETWORK=$(echo $BASENAME | cut -d- -f3)
+    RC_CLIENT=$(echo $BASENAME | cut -d- -f4)
+    RC_IP=0.0.0.0
+fi
+
+if [ x${BASENAME#client-} != x${BASENAME} ]; then
+    # running from openvpn daemon
+    RC_METHOD=client
+
+    RC_ACTION=${BASENAME#client-}
+    case "$RC_ACTION" in
+      connect|up)  RC_ACTION="up" ;;
+      disconnect|down)  RC_ACTION="down" ;;
+      *)  RC_ACTION="" ;;
+    esac
+
+    RC_NETWORK=$(echo $config | cut -d. -f1 | cut -d- -f1)
+
+    RC_CLIENT=${common_name#client-}
+    RC_IP="$untrusted_ip"
+fi
+
+if [ -z "$RC_ACTION" ]; then
+    echo "$RC_ACTION: invalid action (check link name)" 1>&2
     exit 1
-    ;;
-esac
-
-# deduce network name
-RC_NETWORK=$(echo $config | cut -d. -f1 | cut -d- -f1)
+fi
 
 if [ -z "$RC_NETWORK" ]; then
     echo "$RC_NETWORK: invalid network ('config' undefined?)" 1>&2
     exit 1
 fi
-
-# deduce openvpn client name and IP
-RC_CLIENT=${common_name#client-}
-RC_IP="$untrusted_ip"
 
 # logging
 
@@ -99,7 +110,7 @@ while read RC_SCRIPT; do
     # prepare the environment
     export RC_BASE RC_ETC RC_VAR RC_GLO_CFG
     export RC_LOG RC_DEBUG RC_TRACE
-    export RC_NETWORK RC_ACTION RC_CLIENT RC_IP
+    export RC_METHOD RC_NETWORK RC_ACTION RC_CLIENT RC_IP
     export RC_SCRIPT RC_SUBSYS RC_SUB_CFG RC_TMP_VAR
 
     # run the script
