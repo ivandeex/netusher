@@ -5,15 +5,15 @@ AC_REVISION($Id$)dnl
 dnl **** configure.ac for UserWatch ****
 
 AC_PREREQ([2.59])
-AC_INIT([userwatch], [0.0.1], [vsemizarov@gmail.com])
+AC_INIT([userwatch], [0.0.1], [vitki@vitki.net])
 AC_CONFIG_AUX_DIR(config)
-AC_CONFIG_SRCDIR([ChangeLog])
+AC_CONFIG_SRCDIR([src])
 AC_CONFIG_HEADERS([config.h])
-AC_CONFIG_FILES([Makefile])
+AC_CONFIG_FILES([src/Makefile])
 
-AC_DEFINE([PACKAGE_COPYRIGHT], ["Copyright (c) 2008, vitki.net"],
+AC_DEFINE([PACKAGE_COPYRIGHT], ["Copyright (c) 2011, vitki.net"],
           [Define to the project copyright requisites])
-AC_DEFINE([PACKAGE_WEBSITE], ["http://vitki.net/v/projects/userwatch"],
+AC_DEFINE([PACKAGE_WEBSITE], ["http://www.vitki.net/userwatch"],
           [Define to the project web address])
 
 AM_INIT_AUTOMAKE
