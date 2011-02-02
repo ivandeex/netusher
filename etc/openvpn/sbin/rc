@@ -1,0 +1,121 @@
+#!/bin/bash
+# openvpn subsystem controller
+# $Id: rc 113 2011-02-02 13:44:25Z vitki $
+#set -x
+
+# deduce base directory
+RC_BASE=$(readlink -f $0)
+RC_BASE=$(dirname $0)
+RC_BASE=$(readlink -f $RC_BASE/..)
+
+# common files
+RC_BIN=$RC_BASE/rc
+RC_ETC=$RC_BASE/etc
+RC_VAR=$RC_BASE/var
+
+RC_GLO_CFG=$RC_BASE/etc/common
+[ ! -r $RC_GLO_CFG ] && RC_GLO_CFG=/etc/vitki/conf/openvpn/common
+
+if [ ! -r $RC_GLO_CFG ]; then
+    echo "configuration file missing" 1>&2
+    exit 1
+fi
+
+# read configuration
+RC_LOG=/var/log/vitki-openvpn.log
+RC_TMP_LOG=/tmp/xxx.openvpn.rc.log.$$
+RC_TMP_VAR=/tmp/xxx.openvpn.rc.var.$$
+RC_TRACE=0
+. $RC_GLO_CFG
+
+if [ ! -d $RC_BIN -o ! -d $RC_VAR -o ! -d $RC_ETC ]; then
+    echo "configuration directory missing" 1>&2
+    exit 1
+fi
+
+# deduce action
+RC_ACTION=$(basename $0)
+RC_ACTION=${RC_ACTION#client-}
+
+case "$RC_ACTION" in
+  connect|up)
+    RC_ACTION=up
+    ;;
+  disconnect|down)
+    RC_ACTION=down
+    ;;
+  *)
+    echo "$RC_ACTION: invalid action" 1>&2
+    exit 1
+    ;;
+esac
+
+# deduce network name
+RC_NETWORK=$(echo $config | cut -d. -f1 | cut -d- -f1)
+
+if [ -z "$RC_NETWORK" ]; then
+    echo "$RC_NETWORK: invalid network ('config' undefined?)" 1>&2
+    exit 1
+fi
+
+# deduce openvpn client name and IP
+RC_CLIENT=${common_name#client-}
+RC_IP="$untrusted_ip"
+
+# logging
+
+touch $RC_LOG
+function cleanup {
+    rm -f $RC_TMP_LOG $RC_TMP_VAR
+}
+trap cleanup EXIT
+cleanup
+
+echo "======== $RC_NETWORK $RC_ACTION $RC_CLIENT[$RC_IP] (`date`) ========" >> $RC_LOG
+
+# find and run config scripts
+
+PATH=$PATH:$RC_BASE/sbin:/etc/vitki/bin:/bin:/usr/bin:/sbin:/usr/sbin
+export PATH
+
+eval ls -1 \
+    "$RC_BIN/[0-9][0-9]-{any,all,"$RC_ACTION"}-{any,all,"$RC_NETWORK"}-*" \
+    2>/dev/null | \
+while read RC_SCRIPT; do
+    [ -r $RC_SCRIPT -a -x $RC_SCRIPT ] || continue
+
+    # script name should be: NN-ACTION-NETWORK-SUBSYSTEM[.EXT]
+    RC_SUBSYS=$(echo $RC_SCRIPT | cut -d- -f4- | cut -d. -f1)
+    [ -z "$RC_SUBSYS" ] && continue
+
+    # disable subsystem if etc/SUBSYS.off exists
+    [ -f $RC_ETC/$RC_SUBSYS.off ] && continue
+
+    # find configuration file, if any
+    RC_SUB_CFG=$RC_ETC/$RC_SUBSYS.cfg
+    [ ! -r $RC_SUB_CFG ] && RC_SUB_CFG=$RC_ETC/$RC_SUBSYS
+    [ ! -r $RC_SUB_CFG ] && RC_SUB_CFG=""
+
+    # prepare the environment
+    export RC_BASE RC_ETC RC_VAR RC_GLO_CFG
+    export RC_LOG RC_DEBUG RC_TRACE
+    export RC_NETWORK RC_ACTION RC_CLIENT RC_IP
+    export RC_SCRIPT RC_SUBSYS RC_SUB_CFG RC_TMP_VAR
+
+    # run the script
+    echo "[[ $RC_SUBSYS ]]" >> $RC_LOG
+    rm -f $RC_TMP
+    [ x$RC_TRACE = x1 ] && DASH_X="-x" || DASH_X=""
+    (   # export all settings from the subsystem config
+        set -a
+        [ -n "$RC_SUB_CFG" ] && . $RC_SUB_CFG
+        sh $DASH_X $RC_SCRIPT > $RC_TMP_LOG 2>&1
+    )
+    cat $RC_TMP_LOG >> $RC_LOG
+    rm -f $RC_TMP_LOG $RC_TMP_VAR
+done
+
+echo "----------------" >> $RC_LOG 
+exit 0
+# end
+
