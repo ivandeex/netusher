@@ -1,6 +1,6 @@
 #!/bin/bash
 # openvpn subsystem controller
-# $Id: rc 113 2011-02-02 13:44:25Z vitki $
+# $Id$
 #set -x
 
 # deduce base directory

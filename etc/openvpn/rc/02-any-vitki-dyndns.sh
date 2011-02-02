@@ -1,6 +1,6 @@
 #!/bin/sh
 # update dynamic dns zone
-# $Id: 02-any-vitki-dyndns.sh 107 2011-02-02 08:30:40Z vitki $
+# $Id$
 if [ -z "$RC_CLIENT" -o -z "$RC_IP" -o -z "$NS_SERVER" -o -z "$VPN_ZONE" ]; then
     echo "dyndns: missing parameter: client:$RC_CLIENT ip:$RC_IP ns:$NS_SERVER zone:$VPN_ZONE"
     exit 1
