@@ -97,21 +97,21 @@ sub create_request ($$;$$) {
     }
 
     my @ip_list = get_ip_list();
-    $line .= ":!:" . sprintf('%03d:', $#ip_list + 1)
-            . join(':', @ip_list) . ":!:";
+    $line .= ":~:" . sprintf('%03d:', $#ip_list + 1)
+            . join(':', @ip_list) . ":~:";
 
     if ($do_get_list) {
         my (@user_list) = get_user_list();
         $line .= sprintf('%03d', $#user_list + 1);
         for my $u (@user_list) {
-            $line .= sprintf(':%09d:%3s:%s:%s:!',
+            $line .= sprintf(':%09d:%3s:%s:%s:/',
                     $u->[3], $u->[2], $u->[0], $u->[1]);
         }
     } else {
         $line .= "---";
     }
 
-    $line .= ":!\n";
+    $line .= ":~\n";
     $line = sprintf("%04d", length($line) + 4) . $line;
     return $line;
 }
