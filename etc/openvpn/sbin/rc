@@ -15,9 +15,10 @@ RC_VAR=$RC_BASE/var
 
 RC_GLO_CFG=$RC_BASE/etc/common
 [ ! -r $RC_GLO_CFG ] && RC_GLO_CFG=/etc/vitki/conf/openvpn/common
+[ ! -r $RC_GLO_CFG ] && RC_GLO_CFG=/etc/openvpn/rc.cfg
 
 if [ ! -r $RC_GLO_CFG ]; then
-    echo "configuration file missing" 1>&2
+    echo "main configuration file missing" 1>&2
     exit 1
 fi
 
