@@ -9,10 +9,12 @@ use strict;
 use Errno;
 use Fcntl;
 use Net::SSLeay ();
+use Net::SSLeay::Handle;
 use Socket;
 
 our $CFG_ROOT = '/etc/userwatch';
 our $debug = 1;
+our $blocking_ssl = 0;
 
 #
 # Configuration file
@@ -25,6 +27,7 @@ our %uw_config = (
         client_pem => "$CFG_ROOT/uwclient.pem",
         also_local => 0,
         debug      => 0,
+        timeout    => 5,
     );
 
 sub read_config ($) {
@@ -54,7 +57,6 @@ sub read_config ($) {
 # cooperate with other callers in working around Net::SSLeay's deficiency.
 #
 sub ssl_startup () {
-    $| = 1;
 
     Net::SSLeay::load_error_strings();
     eval 'no warnings "redefine"; sub Net::SSLeay::load_error_strings () {}';
@@ -75,6 +77,12 @@ sub ssl_startup () {
     Net::SSLeay::randomize();
     eval 'no warnings "redefine"; sub Net::SSLeay::randomize (;$$) {}';
     die $@ if $@;
+
+    $| = 1;
+    if ($debug > 1) {
+        $Net::SSLeay::trace = 3;
+        Net::SSLeay::Handle->debug(1);
+    }
 }
 
 
@@ -91,11 +99,7 @@ sub ssl_listen ($) {
     listen($sock, SOMAXCONN)
         or die("listen ${port}: $!\n");
 
-    # Set FD_CLOEXEC.
-    $_ = fcntl($sock, F_GETFD, 0)
-        or die "fcntl: $!\n";
-    fcntl($sock, F_SETFD, $_ | FD_CLOEXEC)
-        or die "fnctl: $!\n";
+    ssl_sock_opts($sock, 0);
 
     return $sock;
 }
@@ -103,28 +107,71 @@ sub ssl_listen ($) {
 #
 # Accept another client connection
 #
-sub ssl_accept ($) {
-    my ($sock) = @_;
+sub ssl_accept ($$) {
+    my ($sock, $ctx) = @_;
 
     accept(my $conn, $sock)
         or die "accept: $!\n";
 
-    # No buffering
-    $_ = select($conn); $| = 1; select $_;
+    ssl_sock_opts($conn, 1);
 
-    # Set FD_CLOEXEC.
-    $_ = fcntl($conn, F_GETFD, 0)
-        or die "fcntl: $!\n";
-    fcntl($conn, F_SETFD, $_ | FD_CLOEXEC)
-        or die "fnctl: $!\n";
+    # Each connection needs an SSL object,
+    # which is associated with the shared CTX.
+    my $ssl = Net::SSLeay::new($ctx);
+    ssl_check_die("SSL new");
 
-    # Set O_NONBLOCK.
-    $_ = fcntl($conn, F_GETFL, 0)
-        or die "fcntl F_GETFL: $!\n";  # 0 for error, 0e0 for 0.
-    fcntl($conn, F_SETFL, $_ | O_NONBLOCK)
-        or die "fcntl F_SETFL O_NONBLOCK: $!\n";  # 0 for error, 0e0 for 0.
+    Net::SSLeay::set_fd($ssl, fileno($conn));
+    ssl_check_die("SSL set_fd");
 
-    return $conn;
+    Net::SSLeay::accept($ssl);
+    ssl_check_die("SSL accept");
+
+    return ($ssl, $conn);
+}
+
+#
+# Connect to server
+#
+sub ssl_connect ($$$) {
+    my ($server, $port, $ctx) = @_;
+
+    my $sock;
+    socket($sock, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
+        or die("socket: $!\n");
+
+    my $ip = gethostbyname($server)
+        or die("$server: host not found\n");
+    my $conn_params = sockaddr_in($port, $ip);
+
+    connect($sock, $conn_params)
+        or die("$server: cannot connect: $!\n");
+
+    ssl_sock_opts($sock, 1);
+
+    # Each connection needs an SSL object,
+    # which is associated with the shared CTX.
+    my $ssl = Net::SSLeay::new($ctx);
+    ssl_check_die("SSL new");
+
+    Net::SSLeay::set_fd($ssl, fileno($sock));
+    ssl_check_die("SSL set_fd");
+
+    Net::SSLeay::connect($ssl);
+    ssl_check_die("SSL connect");
+
+    return ($ssl, $sock);
+}
+
+#
+# Detach and close connection
+#
+sub ssl_detach ($$) {
+    my ($ssl, $conn) = @_;
+
+    # Paired with closing connection.
+    Net::SSLeay::free($ssl);
+    ssl_check_die("SSL free");
+    close($conn);
 }
 
 #
@@ -149,16 +196,38 @@ sub ssl_check_die ($) {
     return;
 }
 
+sub ssl_sock_opts ($$) {
+    my ($conn, $nobuf) = @_;
+
+    if (!$blocking_ssl) {
+        # Set FD_CLOEXEC.
+        $_ = fcntl($conn, F_GETFD, 0)
+            or die "fcntl: $!\n";
+        fcntl($conn, F_SETFD, $_ | FD_CLOEXEC)
+            or die "fnctl: $!\n";
+    }
+
+    if (1) {
+        # No buffering
+        $_ = select($conn); $| = 1; select $_;
+    }
+
+    if ($nobuf && !$blocking_ssl) {
+        # Set O_NONBLOCK.
+        $_ = fcntl($conn, F_GETFL, 0)
+            or die "fcntl F_GETFL: $!\n";  # 0 for error, 0e0 for 0.
+        fcntl($conn, F_SETFL, $_ | O_NONBLOCK)
+            or die "fcntl F_SETFL O_NONBLOCK: $!\n";  # 0 for error, 0e0 for 0.
+    }
+}
+
 #
 # The CTX ("context") should be shared between many SSL connections. A CTX
 # could apply to multiple listening sockets, or each listening socket could
 # have its own CTX. Each CTX may represent only one local certificate.
 #
-sub ssl_create_context ($) {
+sub ssl_create_context (;$) {
     my ($pem_path) = @_;
-
-    die "$pem_path: pem certificate not found\n"
-        unless -r $pem_path;
 
     my $ctx = Net::SSLeay::CTX_new();
     ssl_check_die("SSL CTX_new");
@@ -176,12 +245,17 @@ sub ssl_create_context ($) {
     Net::SSLeay::CTX_set_mode($ctx, 0x11);
     ssl_check_die("SSL CTX_set_mode");
 
-    # Load certificate. Avoid password prompt.
-    Net::SSLeay::CTX_set_default_passwd_cb($ctx, sub { "" });
-    Net::SSLeay::CTX_use_RSAPrivateKey_file($ctx, $pem_path, Net::SSLeay::FILETYPE_PEM());
-    ssl_check_die("SSL CTX_use_RSAPrivateKey_file");
-    Net::SSLeay::CTX_use_certificate_file($ctx, $pem_path, Net::SSLeay::FILETYPE_PEM());
-    ssl_check_die("SSL CTX_use_certificate_file");
+    if (defined $pem_path) {
+        die "$pem_path: pem certificate not found\n"
+            unless -r $pem_path;
+
+        # Load certificate. Avoid password prompt.
+        Net::SSLeay::CTX_set_default_passwd_cb($ctx, sub { "" });
+        Net::SSLeay::CTX_use_RSAPrivateKey_file($ctx, $pem_path, Net::SSLeay::FILETYPE_PEM());
+        ssl_check_die("SSL CTX_use_RSAPrivateKey_file");
+        Net::SSLeay::CTX_use_certificate_file($ctx, $pem_path, Net::SSLeay::FILETYPE_PEM());
+        ssl_check_die("SSL CTX_use_certificate_file");
+    }
 
     return $ctx;
 }
@@ -193,37 +267,21 @@ sub ssl_free_context ($) {
 }
 
 #
-# Each connection needs an SSL object,
-# which is associated with the shared CTX.
+# Safe reading and writing
 #
-sub ssl_attach ($$) {
-    my ($ctx, $conn) = @_;
-    my $ssl = Net::SSLeay::new($ctx);
+sub ssl_read ($$$) {
+    my ($ssl, $conn, $bytes) = @_;
 
-    ssl_check_die("SSL new");
-    Net::SSLeay::set_fd($ssl, fileno($conn));
-    ssl_check_die("SSL set_fd");
-    Net::SSLeay::accept($ssl);
-    ssl_check_die("SSL accept");
-
-    return $ssl;
-}
-
-sub ssl_detach ($) {
-    my ($ssl) = @_;
-    Net::SSLeay::free($ssl);
-    ssl_check_die("SSL free");
-}
-
-sub ssl_read_until_cr ($$) {
-    my ($ssl, $conn) = @_;
     my $lines = "";
-    print "Read returned" if $debug;
+    my $timeout = $uw_config{timeout};
+    print "read returned: " if $debug;
 
-    until ($lines =~ qr!\n!s) {
+    while ($bytes > 0) {
         my $vec = "";
         vec($vec, fileno($conn), 1) = 1;
-        select($vec, undef, undef, undef);
+        my ($nfound, $timeleft) = select($vec, $vec, undef, $timeout);
+        $timeout = $timeleft if $timeleft;
+        #print "{$nfound/$timeleft} " if $debug;
 
         # Repeat read() until EAGAIN before select()ing for more. SSL may already be
         # holding the last packet in its buffer, so if we aren't careful to decode
@@ -235,19 +293,21 @@ sub ssl_read_until_cr ($$) {
         # doesn't have this problem since a socket will always become writable again
         # after writing.
 
-        while(1) {
+        while ($bytes > 0) {
             # 16384 is the maximum amount read() can return; larger values allocate memory
             # that can't be unused as part of the buffer passed to read().
-            my $read_buf = Net::SSLeay::read($ssl, 16384);
+            my $read_buf = Net::SSLeay::read($ssl, $bytes);
             ssl_check_die("SSL read");
-            die "read: $!\n"
-                unless defined $read_buf or $!{EAGAIN} or $!{EINTR} or $!{ENOBUFS};
+            if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
+                #print "[again], " if $debug;
+                #print "." if $debug;
+                next;                
+            }
+            die "read: $!\n" unless defined $read_buf;
             if (defined $read_buf) {
-                printf " %s bytes,", length($read_buf) if $debug;
+                print length($read_buf),", " if $debug;
                 $lines .= $read_buf;
-            } else {
-                print " undef," if $debug;
-                last;
+                $bytes -= length($read_buf);
             }
         }
     }
@@ -259,22 +319,76 @@ sub ssl_read_until_cr ($$) {
 
 sub ssl_write ($$$) {
     my ($ssl, $conn, $write_buf) = @_;
-    print "Write returned" if $debug;
 
-    while (length($write_buf)) {
+    my $total = length($write_buf);
+    print "write ($total) returned: " if $debug;
+    my $timeout = $uw_config{timeout};
+
+    while ($total > 0) {
         my $vec = "";
         vec($vec, fileno($conn), 1) = 1;
-        select(undef, $vec, undef, undef);
+        my ($nfound, $timeleft) = select($vec, $vec, undef, $timeout);
+        $timeout = $timeleft if $timeleft;
+        #print "{$nfound/$timeleft} " if $debug;
 
-        my $written = Net::SSLeay::write($ssl, $write_buf);
+        my $bytes = Net::SSLeay::write($ssl, $write_buf);
         ssl_check_die("SSL write");
-        die "write: $!\n"
-            unless $written != -1 or $!{EAGAIN} or $!{EINTR} or $!{ENOBUFS};
-        print " ${written}," if $debug;
-        substr($write_buf, 0, $written, "") if $written > 0;
+        if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
+            #print "[again], " if $debug;
+            #print "." if $debug;
+            next;
+        }
+        die "write error: $!\n" unless $bytes;
+        print $bytes,", " if $debug;
+        if ($bytes > 0) {
+            substr($write_buf, 0, $bytes, "");
+            $total -= $bytes;
+        }
     }
 
     print "\n" if $debug;
+}
+
+sub ssl_read_packet ($$) {
+    my ($ssl, $conn) = @_;
+
+    if ($blocking_ssl) {
+        my $pkt = Net::SSLeay::ssl_read_until($ssl, "\n");
+        return unless $pkt =~ /^\d{4}:/;
+        $pkt = substr($pkt, 5, length($pkt) - 6);
+        print "received: [$pkt]\n" if $debug;
+        return $pkt;
+    }
+
+    my $hdr = ssl_read($ssl, $conn, 5);
+    if ($hdr =~ /^(\d{4}):$/) {
+        my $bytes = $1 - 5;
+        if ($bytes > 0 && $bytes <= 8192) {
+            print "request header: [$hdr]\n" if $debug;
+            my $pkt = ssl_read($ssl, $conn, $bytes);
+            if ($pkt =~ /\n$/) {
+                chomp $pkt;
+                print "received: [$pkt]\n" if $debug;
+                return $pkt;
+            }
+            print "bad request body [$pkt]\n" if $debug;
+            return;
+        }
+    }
+    print "bad request header \"$hdr\"\n" if $debug;
+    return;
+}
+
+sub ssl_write_packet ($$$) {
+    my ($ssl, $conn, $pkt) = @_;
+    die "packet too long\n" if length($pkt) >= 8192;
+    my $hdr = sprintf('%04d:', length($pkt) + 6);
+    print "send packet:[${hdr}${pkt}]\n" if $debug;
+    if ($blocking_ssl) {
+        Net::SSLeay::ssl_write_all($ssl, $hdr . $pkt . "\n");
+    } else {
+        ssl_write($ssl, $conn, $hdr . $pkt . "\n");
+    }
 }
 
 #################################

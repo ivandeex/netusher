@@ -17,13 +17,15 @@ sub main {
     my $ctx = ssl_create_context($uw_config{server_pem});
     my $sock = ssl_listen($uw_config{port});
     while(1) {
-        my $conn = ssl_accept($sock);
-        my $ssl = ssl_attach($ctx, $conn);
-        my $request = ssl_read_until_cr($ssl, $conn);
-        ssl_write($ssl, $conn, "0007OK\n");
-        # Paired with closing connection.
-        ssl_detach($ssl);
-        close($conn);
+        print "waiting for client...\n" if $debug;
+        my ($ssl, $conn) = ssl_accept($sock, $ctx);
+        my $ok = 0;
+        my $req = ssl_read_packet($ssl, $conn);
+        if (defined $req) {
+            print "request ok\n";
+            ssl_write_packet($ssl, $conn, "OK");
+        }
+        ssl_detach($ssl, $conn);
     }
 
     # Paired with closing listening socket.

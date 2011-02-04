@@ -16,6 +16,9 @@ use User::Utmp qw(:constants :utmpx);
 
 our ($CFG_ROOT, $debug, %uw_config);
 
+#
+# scan interfaces
+#
 sub get_ip_list () {
     my @ip_list;
     my $ifconfig = "/sbin/ifconfig";
@@ -34,10 +37,10 @@ sub get_ip_list () {
     return @ip_list;
 }
 
+#
+# get list of active users
+#
 sub get_user_list () {
-    my @user_list;
-    print "user_list" if $debug;
-
     # read user names from /etc/passwd
     my %local_uid;
     open(my $passwd, "/etc/passwd")
@@ -47,7 +50,10 @@ sub get_user_list () {
         $local_uid{$1} = $2;
     }
     close($passwd);
-    
+
+    # scan utmpx
+    print "user_list" if $debug;
+    my @user_list;
 
     for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx) {
         next unless $ut->{ut_type} == USER_PROCESS;
@@ -83,10 +89,13 @@ sub get_user_list () {
     return @user_list;
 }
 
+#
+# make the request packet
+#
 sub create_request ($$;$$) {
     my ($cmd, $do_get_list, $log_usr, $pass) = @_;
 
-    my $line = sprintf(':%s:%09d:', $cmd, time);
+    my $line = sprintf('%s:%09d:', $cmd, time);
 
     if ($log_usr) {
         $line .= sprintf('%3s:%s:%s:%s',
@@ -111,19 +120,27 @@ sub create_request ($$;$$) {
         $line .= "---";
     }
 
-    $line .= ":~\n";
-    $line = sprintf("%04d", length($line) + 4) . $line;
-    return $line;
+    return $line . ":~";
 }
 
 sub main () {
     my $config = "$CFG_ROOT/uwclient.conf";
     read_config($config);
     die "$config: server host undefined\n" unless $uw_config{server};
-    my $request = create_request("C", 1);
-    print $request if $debug;
+    ssl_startup();
+    my $ctx = ssl_create_context($uw_config{client_pem});
+    my ($ssl, $conn) = ssl_connect($uw_config{server}, $uw_config{port}, $ctx);
+    print "connected\n";
+
+    my $req = create_request("C", 1);
+    ssl_write_packet($ssl, $conn, $req);
+    my $reply = ssl_read_packet($ssl, $conn);
+
+    ssl_detach($ssl, $conn);
+    ssl_free_context($ctx);
     print "done\n";
 }
 
 main();
+
 
