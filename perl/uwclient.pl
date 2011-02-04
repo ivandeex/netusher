@@ -128,7 +128,7 @@ sub main () {
     read_config($config);
     die "$config: server host undefined\n" unless $uw_config{server};
     ssl_startup();
-    my $ctx = ssl_create_context($uw_config{client_pem});
+    my $ctx = ssl_create_context($uw_config{client_pem}, $uw_config{ca_cert});
     my ($ssl, $conn) = ssl_connect($uw_config{server}, $uw_config{port}, $ctx);
     print "connected\n";
 

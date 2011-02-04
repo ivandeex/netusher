@@ -13,7 +13,7 @@ use Net::SSLeay::Handle;
 use Socket;
 
 our $CFG_ROOT = '/etc/userwatch';
-our $debug = 1;
+our $debug = 0;
 our $blocking_ssl = 0;
 
 ##############################################
@@ -49,6 +49,7 @@ sub read_config ($) {
         die "$config: configuration error in line $.\n";
     }
     close ($file);
+    $debug = $uw_config{debug};
 }
 
 ##############################################
@@ -142,8 +143,8 @@ sub ssl_sock_opts ($$) {
 # could apply to multiple listening sockets, or each listening socket could
 # have its own CTX. Each CTX may represent only one local certificate.
 #
-sub ssl_create_context (;$) {
-    my ($pem_path) = @_;
+sub ssl_create_context (;$$) {
+    my ($pem_path, $ca_crt_path) = @_;
 
     my $ctx = Net::SSLeay::CTX_new();
     ssl_check_die("SSL CTX_new");
@@ -162,6 +163,7 @@ sub ssl_create_context (;$) {
     ssl_check_die("SSL CTX_set_mode");
 
     if ($pem_path) {
+        # Server and client can use PEM (cert+key) for secure connection
         $pem_path = "$CFG_ROOT/$pem_path"
             unless $pem_path =~ m'^/';
         die "$pem_path: pem certificate not found\n"
@@ -178,13 +180,60 @@ sub ssl_create_context (;$) {
         ssl_check_die("SSL CTX_use_certificate_file");
     }
 
+    if ($ca_crt_path) {
+        # Server and client can use CA certificate to check other side
+        $ca_crt_path = "$CFG_ROOT/$ca_crt_path"
+            unless $ca_crt_path =~ m'^/';
+        die "$ca_crt_path: ca certificate not found\n"
+            unless -r $ca_crt_path;
+        my ($ca_file, $ca_dir) = (-d $ca_crt_path) ?
+                                    (undef, $ca_crt_path) : ($ca_crt_path, undef);
+
+        Net::SSLeay::CTX_load_verify_locations($ctx, $ca_file, $ca_dir);
+        ssl_check_die("SSL CTX_load_verify_locations");
+        print "enable verification file:$ca_file dir:$ca_dir\n" if $debug;
+
+        my $mode = &Net::SSLeay::VERIFY_PEER
+                    | &Net::SSLeay::VERIFY_FAIL_IF_NO_PEER_CERT
+                    | &Net::SSLeay::VERIFY_CLIENT_ONCE;
+        Net::SSLeay::CTX_set_verify($ctx, $mode, \&ssl_cert_verify_cb);
+        ssl_check_die("SSL CTX_set_verify");
+    }
+
     return $ctx;
+}
+
+sub ssl_cert_verify_cb {
+    my ($ok, $x509_store_ctx) = @_;
+    if ($debug) {
+        my $cert = Net::SSLeay::X509_STORE_CTX_get_current_cert($x509_store_ctx);
+        my $subj = Net::SSLeay::X509_NAME_oneline(Net::SSLeay::X509_get_subject_name($cert));
+        my $cname = ($subj =~ m'/CN=([^/]+)/') ? $1 : $subj;
+        print " [verification ok:$ok cname:$cname] ";
+    }
+    return $ok;
 }
 
 sub ssl_free_context ($) {
     my ($ctx) = @_;
     Net::SSLeay::CTX_free($ctx);
     ssl_check_die("SSL CTX_free");
+}
+
+#
+# Each connection needs an SSL object,
+# which is associated with the shared CTX.
+#
+sub ssl_create_ssl ($$) {
+    my ($ctx, $conn) = @_;
+
+    my $ssl = Net::SSLeay::new($ctx);
+    ssl_check_die("SSL new");
+
+    Net::SSLeay::set_fd($ssl, fileno($conn));
+    ssl_check_die("SSL set_fd");
+
+    return $ssl;
 }
 
 #
@@ -219,13 +268,7 @@ sub ssl_accept ($$) {
 
     ssl_sock_opts($conn, 1);
 
-    # Each connection needs an SSL object,
-    # which is associated with the shared CTX.
-    my $ssl = Net::SSLeay::new($ctx);
-    ssl_check_die("SSL new");
-
-    Net::SSLeay::set_fd($ssl, fileno($conn));
-    ssl_check_die("SSL set_fd");
+    my $ssl = ssl_create_ssl($ctx, $conn);
 
     Net::SSLeay::accept($ssl);
     ssl_check_die("SSL accept");
@@ -252,13 +295,7 @@ sub ssl_connect ($$$) {
 
     ssl_sock_opts($sock, 1);
 
-    # Each connection needs an SSL object,
-    # which is associated with the shared CTX.
-    my $ssl = Net::SSLeay::new($ctx);
-    ssl_check_die("SSL new");
-
-    Net::SSLeay::set_fd($ssl, fileno($sock));
-    ssl_check_die("SSL set_fd");
+    my $ssl = ssl_create_ssl($ctx, $sock);
 
     Net::SSLeay::connect($ssl);
     ssl_check_die("SSL connect");

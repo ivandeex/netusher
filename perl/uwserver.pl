@@ -14,7 +14,7 @@ sub main {
     my $config = "$CFG_ROOT/uwserver.conf";
     read_config($config);
     ssl_startup();
-    my $ctx = ssl_create_context($uw_config{server_pem});
+    my $ctx = ssl_create_context($uw_config{server_pem}, $uw_config{ca_cert});
     my $sock = ssl_listen($uw_config{port});
     while(1) {
         print "waiting for client...\n" if $debug;
