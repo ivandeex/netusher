@@ -16,9 +16,10 @@ our $CFG_ROOT = '/etc/userwatch';
 our $debug = 1;
 our $blocking_ssl = 0;
 
-#
+##############################################
 # Configuration file
 #
+
 our %uw_config = (
         server     => undef,
         port       => 7501,
@@ -49,6 +50,10 @@ sub read_config ($) {
     }
     close ($file);
 }
+
+##############################################
+# Safe wrappers around Net::SSLeay
+#
 
 #
 # Somehow you have to guarantee that these are called just once. Alas,
@@ -85,7 +90,106 @@ sub ssl_startup () {
     }
 }
 
+#
+# Net::SSLeay's error functions are terrible.
+# These are a bit more programmable and readable.
+#
+sub ssl_get_error () {
+    my $errors = "";
+    my $errnos = [];
+    while (my $errno = Net::SSLeay::ERR_get_error()) {
+        push @$errnos, $errno;
+        $errors .= Net::SSLeay::ERR_error_string($errno) . "\n";
+    }
+    return $errors, $errnos if wantarray;
+    return $errors;
+}
 
+sub ssl_check_die ($) {
+    my ($message) = @_;
+    my ($errors, $errnos) = ssl_get_error();
+    die "${message}: ${errors}" if @$errnos;
+    return;
+}
+
+sub ssl_sock_opts ($$) {
+    my ($conn, $nobuf) = @_;
+
+    if (!$blocking_ssl) {
+        # Set FD_CLOEXEC.
+        $_ = fcntl($conn, F_GETFD, 0)
+            or die "fcntl: $!\n";
+        fcntl($conn, F_SETFD, $_ | FD_CLOEXEC)
+            or die "fnctl: $!\n";
+    }
+
+    if (1) {
+        # No buffering
+        $_ = select($conn); $| = 1; select $_;
+    }
+
+    if ($nobuf && !$blocking_ssl) {
+        # Set O_NONBLOCK.
+        $_ = fcntl($conn, F_GETFL, 0)
+            or die "fcntl F_GETFL: $!\n";  # 0 for error, 0e0 for 0.
+        fcntl($conn, F_SETFL, $_ | O_NONBLOCK)
+            or die "fcntl F_SETFL O_NONBLOCK: $!\n";  # 0 for error, 0e0 for 0.
+    }
+}
+
+#
+# The CTX ("context") should be shared between many SSL connections. A CTX
+# could apply to multiple listening sockets, or each listening socket could
+# have its own CTX. Each CTX may represent only one local certificate.
+#
+sub ssl_create_context (;$) {
+    my ($pem_path) = @_;
+
+    my $ctx = Net::SSLeay::CTX_new();
+    ssl_check_die("SSL CTX_new");
+
+    # OP_ALL enables all harmless work-arounds for buggy clients.
+    Net::SSLeay::CTX_set_options($ctx, Net::SSLeay::OP_ALL());
+    ssl_check_die("SSL CTX_set_options");
+
+    # Modes:
+    # 0x1: SSL_MODE_ENABLE_PARTIAL_WRITE
+    # 0x2: SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER
+    # 0x4: SSL_MODE_AUTO_RETRY
+    # 0x8: SSL_MODE_NO_AUTO_CHAIN
+    # 0x10: SSL_MODE_RELEASE_BUFFERS (ignored before OpenSSL v1.0.0)
+    Net::SSLeay::CTX_set_mode($ctx, 0x11);
+    ssl_check_die("SSL CTX_set_mode");
+
+    if ($pem_path) {
+        $pem_path = "$CFG_ROOT/$pem_path"
+            unless $pem_path =~ m'^/';
+        die "$pem_path: pem certificate not found\n"
+            unless -r $pem_path;
+
+        # Load certificate. Avoid password prompt.
+        Net::SSLeay::CTX_set_default_passwd_cb($ctx, sub { "" });
+        ssl_check_die("SSL CTX_set_default_passwd_cb");
+
+        Net::SSLeay::CTX_use_RSAPrivateKey_file($ctx, $pem_path, Net::SSLeay::FILETYPE_PEM());
+        ssl_check_die("SSL CTX_use_RSAPrivateKey_file");
+
+        Net::SSLeay::CTX_use_certificate_file($ctx, $pem_path, Net::SSLeay::FILETYPE_PEM());
+        ssl_check_die("SSL CTX_use_certificate_file");
+    }
+
+    return $ctx;
+}
+
+sub ssl_free_context ($) {
+    my ($ctx) = @_;
+    Net::SSLeay::CTX_free($ctx);
+    ssl_check_die("SSL CTX_free");
+}
+
+#
+# Listen for client connections
+#
 sub ssl_listen ($) {
     my ($port) = @_;
 
@@ -172,98 +276,6 @@ sub ssl_detach ($$) {
     Net::SSLeay::free($ssl);
     ssl_check_die("SSL free");
     close($conn);
-}
-
-#
-# Net::SSLeay's error functions are terrible.
-# These are a bit more programmable and readable.
-#
-sub ssl_get_error () {
-    my $errors = "";
-    my $errnos = [];
-    while (my $errno = Net::SSLeay::ERR_get_error()) {
-        push @$errnos, $errno;
-        $errors .= Net::SSLeay::ERR_error_string($errno) . "\n";
-    }
-    return $errors, $errnos if wantarray;
-    return $errors;
-}
-
-sub ssl_check_die ($) {
-    my ($message) = @_;
-    my ($errors, $errnos) = ssl_get_error();
-    die "${message}: ${errors}" if @$errnos;
-    return;
-}
-
-sub ssl_sock_opts ($$) {
-    my ($conn, $nobuf) = @_;
-
-    if (!$blocking_ssl) {
-        # Set FD_CLOEXEC.
-        $_ = fcntl($conn, F_GETFD, 0)
-            or die "fcntl: $!\n";
-        fcntl($conn, F_SETFD, $_ | FD_CLOEXEC)
-            or die "fnctl: $!\n";
-    }
-
-    if (1) {
-        # No buffering
-        $_ = select($conn); $| = 1; select $_;
-    }
-
-    if ($nobuf && !$blocking_ssl) {
-        # Set O_NONBLOCK.
-        $_ = fcntl($conn, F_GETFL, 0)
-            or die "fcntl F_GETFL: $!\n";  # 0 for error, 0e0 for 0.
-        fcntl($conn, F_SETFL, $_ | O_NONBLOCK)
-            or die "fcntl F_SETFL O_NONBLOCK: $!\n";  # 0 for error, 0e0 for 0.
-    }
-}
-
-#
-# The CTX ("context") should be shared between many SSL connections. A CTX
-# could apply to multiple listening sockets, or each listening socket could
-# have its own CTX. Each CTX may represent only one local certificate.
-#
-sub ssl_create_context (;$) {
-    my ($pem_path) = @_;
-
-    my $ctx = Net::SSLeay::CTX_new();
-    ssl_check_die("SSL CTX_new");
-
-    # OP_ALL enables all harmless work-arounds for buggy clients.
-    Net::SSLeay::CTX_set_options($ctx, Net::SSLeay::OP_ALL());
-    ssl_check_die("SSL CTX_set_options");
-
-    # Modes:
-    # 0x1: SSL_MODE_ENABLE_PARTIAL_WRITE
-    # 0x2: SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER
-    # 0x4: SSL_MODE_AUTO_RETRY
-    # 0x8: SSL_MODE_NO_AUTO_CHAIN
-    # 0x10: SSL_MODE_RELEASE_BUFFERS (ignored before OpenSSL v1.0.0)
-    Net::SSLeay::CTX_set_mode($ctx, 0x11);
-    ssl_check_die("SSL CTX_set_mode");
-
-    if (defined $pem_path) {
-        die "$pem_path: pem certificate not found\n"
-            unless -r $pem_path;
-
-        # Load certificate. Avoid password prompt.
-        Net::SSLeay::CTX_set_default_passwd_cb($ctx, sub { "" });
-        Net::SSLeay::CTX_use_RSAPrivateKey_file($ctx, $pem_path, Net::SSLeay::FILETYPE_PEM());
-        ssl_check_die("SSL CTX_use_RSAPrivateKey_file");
-        Net::SSLeay::CTX_use_certificate_file($ctx, $pem_path, Net::SSLeay::FILETYPE_PEM());
-        ssl_check_die("SSL CTX_use_certificate_file");
-    }
-
-    return $ctx;
-}
-
-sub ssl_free_context ($) {
-    my ($ctx) = @_;
-    Net::SSLeay::CTX_free($ctx);
-    ssl_check_die("SSL CTX_free");
 }
 
 #
@@ -391,6 +403,6 @@ sub ssl_write_packet ($$$) {
     }
 }
 
-#################################
+##############################################
 1;
 
