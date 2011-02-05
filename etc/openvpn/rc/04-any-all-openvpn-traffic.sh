@@ -27,12 +27,13 @@ while read LINE; do
     fi
     [ $CNAME = $RC_CLIENT -o $RC_CLIENT = all ] || continue
 
-    SQL="INSERT INTO uw_traffic
-        (beg_time,end_time,running,cname,real_ip,real_port,vpn_ip,rx_bytes,tx_bytes)
+    SQL="INSERT INTO uw_openvpn
+        (beg_time,end_time,running,cname,
+            real_ip,real_port,vpn_ip,rx_bytes,tx_bytes)
         VALUES (FROM_UNIXTIME($STARTED_UNIX),NOW(),$RUNNING,'$CNAME',
                 '$REAL_IP',$REAL_PORT,'$VPN_IP',$RX_BYTES,$TX_BYTES)
         ON DUPLICATE KEY UPDATE
-                end_time=NOW(), running=$RUNNING, cname='$CNAME',
+                end_time=NOW(), running=$RUNNING,
                 vpn_ip='$VPN_IP', rx_bytes=$RX_BYTES, tx_bytes=$TX_BYTES;"
     #echo "$SQL"
     mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_DBASE <<< "$SQL"
