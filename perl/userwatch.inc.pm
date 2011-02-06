@@ -21,34 +21,58 @@ our $blocking_ssl = 0;
 #
 
 our %uw_config = (
-        server     => undef,
-        port       => 7501,
-        ca_cert    => "$CFG_ROOT/ca.crt",
-        server_pem => "$CFG_ROOT/uwserver.pem",
-        client_pem => "$CFG_ROOT/uwclient.pem",
-        also_local => 0,
-        debug      => 0,
-        timeout    => 5,
+        # common parameters
+        port        => 7501,
+        ca_cert     => "$CFG_ROOT/ca.crt",
+        debug       => 0,
+        timeout     => 5,
+        # client parameters
+        server      => undef,
+        client_pem  => "$CFG_ROOT/uwclient.pem",
+        also_local  => 0,
+        # server parameters
+        server_pem  => "$CFG_ROOT/uwserver.pem",
+        mysql_host  => "localhost",
+        mysql_port  => 3306,
+        mysql_db    => undef,
+        mysql_user  => undef,
+        mysql_pass  => undef,
+        vpn_net     => undef,
+        ldap_uri        => undef,
+        ldap_bind_dn    => undef,
+        ldap_bind_pass  => undef,
+        ldap_user_base  => undef,
+        ldap_attr_user  => 'uid',
+        ldap_attr_uid   => 'uidNumber',
+        cache_retention => 300,
     );
 
-sub read_config ($) {
-    my ($config) = @_;
+sub read_config ($$$) {
+    my ($config, $required, $optional) = @_;
+    my (%h_required, %h_allowed);
+    $h_allowed{$_} = 1 for (@$required, @$optional);
+    $h_required{$_} = 1 for (@$required);
+
     open (my $file, $config)
         or die "$config: configuration file not found\n";
     while (<$file>) {
         next if /^\s*$/ || /^\s*#/;
         if (/^\s*(\w+)\s*=\s*(\S+)\s*$/) {
             my ($param, $value) = ($1, $2);
-            if (exists $uw_config{$param}) {
-                if ($uw_config{$param} !~ /^\d+$/ || $value =~ /^\d+$/) {
-                    $uw_config{$param} = $value;
-                    next;
-                }
+            die "$config: unknown parameter \"$param\"\n"
+                if !exists($uw_config{$param}) || !exists($h_allowed{$param});
+            if ($uw_config{$param} !~ /^\d+$/ || $value =~ /^\d+$/) {
+                $uw_config{$param} = $value;
+                next;
             }
         }
         die "$config: configuration error in line $.\n";
     }
     close ($file);
+    for my $param (sort keys %h_required) {
+        die "$config: missing required parameter \"$param\"\n"
+            unless defined $uw_config{$param};
+    }
     $debug = $uw_config{debug};
 }
 
@@ -263,8 +287,11 @@ sub ssl_listen ($) {
 sub ssl_accept ($$) {
     my ($sock, $ctx) = @_;
 
-    accept(my $conn, $sock)
-        or die "accept: $!\n";
+    my $from = accept(my $conn, $sock);
+    unless ($from) {
+        print "accept: $!\n" if $debug;
+        return;
+    }
 
     ssl_sock_opts($conn, 1);
 
@@ -312,6 +339,7 @@ sub ssl_detach ($$) {
     # Paired with closing connection.
     Net::SSLeay::free($ssl);
     ssl_check_die("SSL free");
+    shutdown($conn, 2);
     close($conn);
 }
 
@@ -349,14 +377,19 @@ sub ssl_read ($$$) {
             ssl_check_die("SSL read");
             if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
                 #print "[again], " if $debug;
-                #print "." if $debug;
+                #print "!" if $debug;
                 next;                
             }
-            die "read: $!\n" unless defined $read_buf;
+            die "read: $!\n"
+                unless defined $read_buf;
             if (defined $read_buf) {
-                print length($read_buf),", " if $debug;
+                my $len = length($read_buf);
+                if ($len == 0) {
+                    print "\nconnection terminated\n" if $debug;
+                    return;
+                }
                 $lines .= $read_buf;
-                $bytes -= length($read_buf);
+                $bytes -= $len;
             }
         }
     }
@@ -384,11 +417,11 @@ sub ssl_write ($$$) {
         ssl_check_die("SSL write");
         if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
             #print "[again], " if $debug;
-            #print "." if $debug;
+            #print "!" if $debug;
             next;
         }
         die "write error: $!\n" unless $bytes;
-        print $bytes,", " if $debug;
+        print $bytes > 0 ? $bytes.", " : "." if $debug;
         if ($bytes > 0) {
             substr($write_buf, 0, $bytes, "");
             $total -= $bytes;

@@ -80,9 +80,14 @@ sub get_user_list () {
             $uid = $xuid if defined $xuid;
         }
 
-        my $u = [ $user, $uid, $method, $ut->{ut_time} ];
+        my $u = {
+                beg_time => $ut->{ut_time},
+                method => $method,
+                username => $user,
+                uid => $uid,
+                };
         push @user_list, $u;
-        print ":[$user,$uid,$method,".$ut->{ut_time}."]" if $debug;
+        print ":[$user,$uid,$method,".$u->{beg_time}."]" if $debug;
     }
 
     print ".\n" if $debug;
@@ -92,18 +97,15 @@ sub get_user_list () {
 #
 # make the request packet
 #
-sub create_request ($$;$$) {
-    my ($cmd, $do_get_list, $log_usr, $pass) = @_;
+sub create_request ($$;$) {
+    my ($cmd, $do_get_list, $log_usr) = @_;
 
     my $line = sprintf('%s:%09d:', $cmd, time);
 
-    if ($log_usr) {
-        $line .= sprintf('%3s:%s:%s:%s',
-                    $log_usr->[2], $log_usr->[0], $log_usr->[1],
-                    defined($pass) ? $pass : "");
-    } else {
-        $line .= ":::";
-    }
+    $log_usr = {} unless defined $log_usr;
+    $line .= sprintf('%s:%s:%s:%s',
+                    $log_usr->{method}, $log_usr->{username},
+                    $log_usr->{uid}, $log_usr->{pass});
 
     my @ip_list = get_ip_list();
     $line .= ":~:" . sprintf('%03d:', $#ip_list + 1)
@@ -114,7 +116,8 @@ sub create_request ($$;$$) {
         $line .= sprintf('%03d', $#user_list + 1);
         for my $u (@user_list) {
             $line .= sprintf(':%09d:%3s:%s:%s:/',
-                    $u->[3], $u->[2], $u->[0], $u->[1]);
+                            $u->{beg_time}, $u->{method},
+                            $u->{username}, $u->{uid});
         }
     } else {
         $line .= "---";
@@ -125,7 +128,9 @@ sub create_request ($$;$$) {
 
 sub main () {
     my $config = "$CFG_ROOT/uwclient.conf";
-    read_config($config);
+    read_config($config,
+                [ qw(server) ],
+                [ qw(port ca_cert client_pem also_local debug timeout) ]);
     die "$config: server host undefined\n" unless $uw_config{server};
     ssl_startup();
     my $ctx = ssl_create_context($uw_config{client_pem}, $uw_config{ca_cert});
