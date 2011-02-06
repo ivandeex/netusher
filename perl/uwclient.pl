@@ -15,6 +15,7 @@ require "$Bin/userwatch.inc.pm";
 use User::Utmp qw(:constants :utmpx);
 
 our ($CFG_ROOT, $debug, %uw_config);
+our ($ssl_ctx, $ssl, $conn);
 
 #
 # scan interfaces
@@ -83,7 +84,7 @@ sub get_user_list () {
         my $u = {
                 beg_time => $ut->{ut_time},
                 method => $method,
-                username => $user,
+                user => $user,
                 uid => $uid,
                 };
         push @user_list, $u;
@@ -104,7 +105,7 @@ sub create_request ($$;$) {
 
     $log_usr = {} unless defined $log_usr;
     $line .= sprintf('%s:%s:%s:%s',
-                    $log_usr->{method}, $log_usr->{username},
+                    $log_usr->{method}, $log_usr->{user},
                     $log_usr->{uid}, $log_usr->{pass});
 
     my @ip_list = get_ip_list();
@@ -117,13 +118,40 @@ sub create_request ($$;$) {
         for my $u (@user_list) {
             $line .= sprintf(':%09d:%3s:%s:%s:/',
                             $u->{beg_time}, $u->{method},
-                            $u->{username}, $u->{uid});
+                            $u->{user}, $u->{uid});
         }
     } else {
         $line .= "---";
     }
 
     return $line . ":~";
+}
+
+#
+# wrappers
+#
+sub cron_job () {
+    my $req = create_request("C", 1);
+    ssl_write_packet($ssl, $conn, $req);
+    return ssl_read_packet($ssl, $conn);
+}
+
+sub user_login ($$$;$) {
+    my ($method, $user, $pass, $uid) = @_;
+    my $req = create_request("I", 0, {
+                method => $method, user => $user, pass => $pass, uid => $uid
+                });
+    ssl_write_packet($ssl, $conn, $req);
+    return ssl_read_packet($ssl, $conn);
+}
+
+sub user_logout ($$) {
+    my ($method, $user) = @_;
+    my $req = create_request("O", 0, {
+                method => $method, user => $user, uid => 0
+                });
+    ssl_write_packet($ssl, $conn, $req);
+    return ssl_read_packet($ssl, $conn);    
 }
 
 sub main () {
@@ -133,19 +161,29 @@ sub main () {
                 [ qw(port ca_cert client_pem also_local debug timeout) ]);
     die "$config: server host undefined\n" unless $uw_config{server};
     ssl_startup();
-    my $ctx = ssl_create_context($uw_config{client_pem}, $uw_config{ca_cert});
-    my ($ssl, $conn) = ssl_connect($uw_config{server}, $uw_config{port}, $ctx);
+    $ssl_ctx = ssl_create_context($uw_config{client_pem}, $uw_config{ca_cert});
+    ($ssl, $conn) = ssl_connect($uw_config{server}, $uw_config{port}, $ssl_ctx);
     print "connected\n";
-
-    my $req = create_request("C", 1);
-    ssl_write_packet($ssl, $conn, $req);
-    my $reply = ssl_read_packet($ssl, $conn);
-
-    ssl_detach($ssl, $conn);
-    ssl_free_context($ctx);
-    print "done\n";
+    user_login('GDM', 'ibunin', 'welcome');
 }
 
-main();
+my $cleanup_done;
 
+sub cleanup () {
+    return if $cleanup_done;
+    $cleanup_done = 1;
+
+    ssl_detach($ssl, $conn);
+    undef $ssl;
+    undef $conn;
+
+    ssl_free_context($ssl_ctx);
+    undef $ssl_ctx;
+
+    print "bye\n";
+}
+
+$SIG{INT} = $SIG{TERM} = $SIG{QUIT} = \&cleanup;
+END { cleanup(); }
+main();
 

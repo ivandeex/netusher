@@ -240,8 +240,10 @@ sub ssl_cert_verify_cb {
 
 sub ssl_free_context ($) {
     my ($ctx) = @_;
-    Net::SSLeay::CTX_free($ctx);
-    ssl_check_die("SSL CTX_free");
+    if (defined $ctx) {
+        Net::SSLeay::CTX_free($ctx);
+        ssl_check_die("SSL CTX_free");
+    }
 }
 
 #
@@ -337,10 +339,14 @@ sub ssl_detach ($$) {
     my ($ssl, $conn) = @_;
 
     # Paired with closing connection.
-    Net::SSLeay::free($ssl);
-    ssl_check_die("SSL free");
-    shutdown($conn, 2);
-    close($conn);
+    if (defined $ssl) {
+        Net::SSLeay::free($ssl);
+        ssl_check_die("SSL free");
+    }
+    if (defined $conn) {
+        shutdown($conn, 2);
+        close($conn);
+    }
 }
 
 #

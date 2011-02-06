@@ -11,8 +11,66 @@ use DBI;
 use Net::LDAP;
 
 our ($CFG_ROOT, $debug, %uw_config);
-our ($vpn_regex, $dbh, $ssl_ctx, $srv_sock);
-our ($ldap, %ldap_cache);
+our ($ssl_ctx, $srv_sock, $ssl, $conn);
+our ($vpn_regex, $dbh, $ldap, %ldap_cache);
+
+sub ldap_connect () {
+    $ldap = Net::LDAP->new($uw_config{ldap_uri},
+                            timeout => $uw_config{timeout});
+    die "cannot connect to ldap\n"
+        unless defined $ldap;
+    my $res = $ldap->bind($uw_config{ldap_bind_dn},
+                            password => $uw_config{ldap_bind_pass});
+    die "cannot bind to ldap: ".$res->error."\n"
+        if $res->code();
+}
+
+sub ldap_get_uid ($) {
+    my ($user) = @_;
+    my $uid;
+    my $res = $ldap->search(base => $uw_config{ldap_user_base},
+                            filter => sprintf('(%s=%s)',
+                                            $uw_config{ldap_attr_user}, $user),
+                            scope => 'one', defer => 'never',
+                            attrs => [ $uw_config{ldap_attr_uid} ]
+                            );
+    my $entry = $res->pop_entry();
+    if (!$res->code() && $entry) {
+        $uid  = $entry->get_value($uw_config{ldap_attr_uid});
+    }
+    return $uid;
+}
+
+sub ldap_authenticate ($$) {
+    my ($user, $pass) = @_;
+    my $auth_ldap = Net::LDAP->new($uw_config{ldap_uri},
+                                    timeout => $uw_config{timeout});
+    unless (defined $auth_ldap) {
+        return "server down";
+    }
+    my $uid = ldap_get_uid($user);
+    unless (defined $uid) {
+        return "user not found";
+    }
+    my $bind_dn = sprintf('%s=%s,$s', $uw_config{ldap_attr_user},
+                            $user, $uw_config{ldap_user_base});
+    my $res = $auth_ldap->bind($bind_dn, password => $pass);
+    $auth_ldap->unbind();
+    if ($res->code()) {
+        return "invalid password";
+    }
+    return "OK";   
+}
+
+sub mysql_connect () {
+    $dbh = DBI->connect(
+                "DBI:mysql:$uw_config{mysql_db};host=$uw_config{mysql_host}",
+                $uw_config{mysql_user}, $uw_config{mysql_pass})
+		or die "cannot connect to database\n";
+    $dbh->{mysql_enable_utf8} = 1;
+    $dbh->{AutoCommit} = 1;
+    $dbh->do("SET NAMES 'utf8'");
+}
 
 sub parse_req ($) {
     my ($str) = @_;
@@ -128,13 +186,15 @@ sub main {
     $vpn_regex =~ s/\./\\./g;
     $vpn_regex = qr[$vpn_regex];
 
+    mysql_connect();
+    ldap_connect();
     ssl_startup();
 
     $ssl_ctx = ssl_create_context($uw_config{server_pem}, $uw_config{ca_cert});
     $srv_sock = ssl_listen($uw_config{port});
     while ($srv_sock) {
         print "waiting for client...\n" if $debug;
-        my ($ssl, $conn) = ssl_accept($srv_sock, $ssl_ctx);
+        ($ssl, $conn) = ssl_accept($srv_sock, $ssl_ctx);
         next unless defined $ssl;
 
         my $ok = 0;
@@ -150,7 +210,10 @@ sub main {
                 ssl_write_packet($ssl, $conn, "invalid request");
             }
         }
+
         ssl_detach($ssl, $conn);
+        undef $ssl;
+        undef $conn;
     }
 }
 
@@ -158,18 +221,24 @@ my $cleanup_done;
 
 sub cleanup () {
     return if $cleanup_done;
-    # Paired with closing listening socket.
-    if (defined $srv_sock) {
-        shutdown($srv_sock, 2);
-        close($srv_sock);
-        undef $srv_sock;
-    }
-    if (defined $ssl_ctx) {
-        ssl_free_context($ssl_ctx);
-        undef $ssl_ctx;
-    }
-    print "bye\n";
     $cleanup_done = 1;
+
+    ssl_detach($ssl, $conn);
+    ssl_detach(undef, $srv_sock);
+    undef $ssl;
+    undef $conn;
+    undef $srv_sock;
+
+    ssl_free_context($ssl_ctx);
+    undef $ssl_ctx;
+
+    $dbh->disconnect() if defined $dbh;
+    undef $dbh;
+
+    $ldap->unbind() if defined $ldap;
+    undef $ldap;
+
+    print "bye\n";
 }
 
 $SIG{INT} = $SIG{TERM} = $SIG{QUIT} = \&cleanup;
