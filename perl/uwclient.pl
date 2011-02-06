@@ -164,7 +164,7 @@ sub main () {
     $ssl_ctx = ssl_create_context($uw_config{client_pem}, $uw_config{ca_cert});
     ($ssl, $conn) = ssl_connect($uw_config{server}, $uw_config{port}, $ssl_ctx);
     print "connected\n";
-    user_login('GDM', 'ibunin', 'ibunin12');
+    cron_job();
 }
 
 my $cleanup_done;
