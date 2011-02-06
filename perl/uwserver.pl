@@ -14,52 +14,81 @@ our ($CFG_ROOT, $debug, %uw_config);
 our ($ssl_ctx, $srv_sock, $ssl, $conn);
 our ($vpn_regex, $dbh, $ldap, %ldap_cache);
 
-sub ldap_connect () {
-    $ldap = Net::LDAP->new($uw_config{ldap_uri},
-                            timeout => $uw_config{timeout});
-    die "cannot connect to ldap\n"
-        unless defined $ldap;
-    my $res = $ldap->bind($uw_config{ldap_bind_dn},
-                            password => $uw_config{ldap_bind_pass});
-    die "cannot bind to ldap: ".$res->error."\n"
-        if $res->code();
+sub ldap_init () {
+    my ($msg, $ldap_conn)
+        = ldap_connect($uw_config{ldap_bind_dn}, undef,
+                        $uw_config{ldap_bind_pass}, 0);
+    $ldap = $ldap_conn unless $msg;
+    return $msg;
+}
+
+sub ldap_connect ($$$$) {
+    my ($bind_dn, $user, $pass, $just_check) = @_;
+
+    my $ldap_conn = Net::LDAP->new($uw_config{ldap_uri},
+                                timeout => $uw_config{timeout},
+                                version => 3)
+        or return "ldap server down";
+
+    if ($uw_config{ldap_start_tls}) {
+        $ldap_conn->start_tls()
+            or return "ldap tls failed";
+    }
+
+    if (!$bind_dn) {
+        $bind_dn = sprintf('%s=%s,%s', $uw_config{ldap_attr_user},
+                            $user, $uw_config{ldap_user_base});
+    }
+    my $res = $ldap_conn->bind($bind_dn, password => $pass);
+
+    $ldap_conn->unbind() if $just_check;
+
+    if ($debug) {
+        print sprintf("ldap auth uri:%s tls:%s bind:%s pass:%s returns: %s\n",
+                    $uw_config{ldap_uri}, $uw_config{ldap_start_tls},
+                    $bind_dn, $pass, $res->error())
+    }
+    return "invalid password" if $res->code();
+
+    # success
+    return (0, $ldap_conn);
 }
 
 sub ldap_get_uid ($) {
     my ($user) = @_;
-    my $uid;
-    my $res = $ldap->search(base => $uw_config{ldap_user_base},
-                            filter => sprintf('(%s=%s)',
-                                            $uw_config{ldap_attr_user}, $user),
-                            scope => 'one', defer => 'never',
-                            attrs => [ $uw_config{ldap_attr_uid} ]
-                            );
+    my ($uid, $res);
+
+    for (my $try = 1; $try < 4; $try++) {
+        if ($ldap) {
+            $res = $ldap->search(
+                    base => $uw_config{ldap_user_base},
+                    filter => sprintf('(%s=%s)', $uw_config{ldap_attr_user}, $user),
+                    scope => 'one', defer => 'never',
+                    attrs => [ $uw_config{ldap_attr_uid} ]
+                    );
+        }
+        if (!$ldap || $res->code() == 1) {
+            # unexpected eof. try to reconnect
+            print "restoring ldap connection ($try)\n" if $debug;
+            undef $ldap;
+            ldap_init();
+            # a little delay
+            select(undef, undef, undef, ($try - 1) * 0.100);
+        } else {
+            last;
+        }
+    }
+
     my $entry = $res->pop_entry();
     if (!$res->code() && $entry) {
         $uid  = $entry->get_value($uw_config{ldap_attr_uid});
     }
-    return $uid;
-}
 
-sub ldap_authenticate ($$) {
-    my ($user, $pass) = @_;
-    my $auth_ldap = Net::LDAP->new($uw_config{ldap_uri},
-                                    timeout => $uw_config{timeout});
-    unless (defined $auth_ldap) {
-        return "server down";
+    if ($debug) {
+        print sprintf("ldap_get_uid (%s) = (%s) (mesage(%s): %s)\n",
+                    $user, $uid, $res->code(), $res->error())
     }
-    my $uid = ldap_get_uid($user);
-    unless (defined $uid) {
-        return "user not found";
-    }
-    my $bind_dn = sprintf('%s=%s,$s', $uw_config{ldap_attr_user},
-                            $user, $uw_config{ldap_user_base});
-    my $res = $auth_ldap->bind($bind_dn, password => $pass);
-    $auth_ldap->unbind();
-    if ($res->code()) {
-        return "invalid password";
-    }
-    return "OK";   
+    return $uid;
 }
 
 sub mysql_connect () {
@@ -149,10 +178,13 @@ sub handle_req ($) {
     if ($req->{cmd} eq 'I') {
         # login
         my $log_usr = $req->{log_usr};
-        my $msg = ldap_authenticate($log_usr->{user}, $log_usr->{pass});
-        if ($msg ne "OK") {
-            return $msg;
-        }
+
+        my $uid = ldap_get_uid($log_usr->{user});
+        return "user not found" unless defined $uid;
+
+        my ($msg) = ldap_connect(undef, $log_usr->{user}, $log_usr->{pass}, 1);
+        return $msg if $msg;
+
         for (my $i = 0; $i <= $#users; $i++) {
             if ($users[$i]->{user} eq $log_usr->{user}) {
                 splice @users, $i, 1;
@@ -174,7 +206,8 @@ sub main {
                 ) ],
                 [ qw(
                     port ca_cert server_pem mysql_port debug timeout
-                    ldap_attr_user ldap_attr_uid cache_retention
+                    ldap_attr_user ldap_attr_uid ldap_start_tls
+                    cache_retention
                 ) ]);
 
     # create regular expression for vpn network
@@ -186,8 +219,9 @@ sub main {
     $vpn_regex =~ s/\./\\./g;
     $vpn_regex = qr[$vpn_regex];
 
+    my $msg = ldap_init();
+    die "ldap init failed: $msg\n" if $msg;
     mysql_connect();
-    ldap_connect();
     ssl_startup();
 
     $ssl_ctx = ssl_create_context($uw_config{server_pem}, $uw_config{ca_cert});

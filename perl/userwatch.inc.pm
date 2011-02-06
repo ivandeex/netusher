@@ -41,6 +41,7 @@ our %uw_config = (
         ldap_uri        => undef,
         ldap_bind_dn    => undef,
         ldap_bind_pass  => undef,
+        ldap_start_tls  => 0,
         ldap_user_base  => undef,
         ldap_attr_user  => 'uid',
         ldap_attr_uid   => 'uidNumber',
