@@ -12,16 +12,26 @@ use Net::LDAP;
 
 our ($CFG_ROOT, $debug, %uw_config);
 our ($ssl_ctx, $srv_sock, $ssl, $conn);
-our ($vpn_regex, $dbh, $ldap, %ldap_cache);
+our ($dbh, $ldap, %uid_cache, $vpn_regex);
 
+my ($cleanup_done);
+
+#
+# connection to ldap for browsing
+#
 sub ldap_init () {
     my ($msg, $ldap_conn)
         = ldap_connect($uw_config{ldap_bind_dn}, undef,
                         $uw_config{ldap_bind_pass}, 0);
     $ldap = $ldap_conn unless $msg;
+    # flush ldap cache at every re-connection
+    %uid_cache = ();
     return $msg;
 }
 
+#
+# connection to ldap for browsing or to to check credentials
+#
 sub ldap_connect ($$$$) {
     my ($bind_dn, $user, $pass, $just_check) = @_;
 
@@ -54,11 +64,28 @@ sub ldap_connect ($$$$) {
     return (0, $ldap_conn);
 }
 
+#
+# return ldap uidNumber for given user
+#
 sub ldap_get_uid ($) {
     my ($user) = @_;
     my ($uid, $res);
 
-    for (my $try = 1; $try < 4; $try++) {
+    # try to fetch uid from cache
+    my $stamp = time();
+    if (exists($uid_cache{$user})) {
+        if ($stamp - $uid_cache{$user}{stamp} < $uw_config{cache_retention}) {
+            $uid = $uid_cache{$user}{uid};
+            print "ldap_get_uid ($user) = ($uid) (from cache)\n" if $debug;
+            return $uid;
+        }
+        delete $uid_cache{$user};
+    }
+
+    # search for uid in ldap.
+    # ldap server might have disconnected due to timeout.
+    # if so, we try to re-connect and repeat the search.
+    for (my $try = 1; $try <= 2; $try++) {
         if ($ldap) {
             $res = $ldap->search(
                     base => $uw_config{ldap_user_base},
@@ -79,18 +106,33 @@ sub ldap_get_uid ($) {
         }
     }
 
+    # fetch uid from ldap array
+    unless ($res) {
+        print "ldap get uid user:$user server down\n" if $debug;
+        return;
+    }
     my $entry = $res->pop_entry();
     if (!$res->code() && $entry) {
         $uid  = $entry->get_value($uw_config{ldap_attr_uid});
     }
 
-    if ($debug) {
-        print sprintf("ldap_get_uid (%s) = (%s) (mesage(%s): %s)\n",
-                    $user, $uid, $res->code(), $res->error())
+    # update cache
+    if (defined $uid) {
+        $uid_cache{$user}{uid} = $uid;
+        $uid_cache{$user}{stamp} = $stamp;
     }
+
+    if ($debug) {
+        print sprintf("ldap_get_uid user:%s uid:%s message:%s\n",
+                        $user, $uid, $res->error());
+    }
+
     return $uid;
 }
 
+#
+# connect to mysql.
+#
 sub mysql_connect () {
     $dbh = DBI->connect(
                 "DBI:mysql:$uw_config{mysql_db};host=$uw_config{mysql_host}",
@@ -101,9 +143,14 @@ sub mysql_connect () {
     $dbh->do("SET NAMES 'utf8'");
 }
 
+#
+# parse request string.
+#
 sub parse_req ($) {
     my ($str) = @_;
-    #C:1296872500:::::~:002:192.168.203.4:10.30.4.1:~:002:1296600643:XDM:root:0:/:1296856317:XTY:root:0:/:~
+
+    # typical request:
+    # C:1296872500:::::~:002:192.168.203.4:10.30.4.1:~:002:1296600643:XDM:root:0:/:1296856317:XTY:root:0:/:~
 
     my @arr = split /:/, $str;
     print "arr:".join(',',map { "$_=$arr[$_]" } (0 .. $#arr))."\n" if $debug;
@@ -172,33 +219,45 @@ sub parse_req ($) {
     return { cmd => $cmd, log_usr => $log_usr, ip => $ip, users => \@users };
 }
 
+#
+# handle client request.
+#
 sub handle_req ($) {
     my ($req) = @_;
     my @users = @{ $req->{users} };
+
     if ($req->{cmd} eq 'I') {
-        # login
+        # user login handler
         my $log_usr = $req->{log_usr};
 
+        # first, verify that user exists at all
         my $uid = ldap_get_uid($log_usr->{user});
         return "user not found" unless defined $uid;
 
+        # verify user password
         my ($msg) = ldap_connect(undef, $log_usr->{user}, $log_usr->{pass}, 1);
         return $msg if $msg;
 
+        # add this user to the beginning of the big list
         for (my $i = 0; $i <= $#users; $i++) {
             if ($users[$i]->{user} eq $log_usr->{user}) {
                 splice @users, $i, 1;
             }
         }
         unshift @users, $log_usr;
-    } elsif ($req->{cmd} eq 'O') {
+    }
+    elsif ($req->{cmd} eq 'O') {
         # logout
     }
+
     # update database from the array of users
     return "OK";
 }
 
-sub main {
+#
+# main code
+#
+sub main () {
     my $config = "$CFG_ROOT/uwserver.conf";
     read_config($config, [ qw(
                     vpn_net mysql_host mysql_db mysql_user mysql_pass
@@ -220,7 +279,7 @@ sub main {
     $vpn_regex = qr[$vpn_regex];
 
     my $msg = ldap_init();
-    die "ldap init failed: $msg\n" if $msg;
+    print "warning: ldap init failed: $msg\n" if $msg;
     mysql_connect();
     ssl_startup();
 
@@ -250,8 +309,6 @@ sub main {
         undef $conn;
     }
 }
-
-my $cleanup_done;
 
 sub cleanup () {
     return if $cleanup_done;
