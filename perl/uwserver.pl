@@ -187,21 +187,13 @@ sub parse_req ($) {
     return "invalid uid"
         if $log_usr->{uid} && $log_usr->{uid} !~ /^\d+$/;
 
-    # find vpn ip
-    my $ip;
-    for (my $i = 8; $i < $arr[7] + 7; $i++) {
+    # parse IP list
+    my @ips;
+    for (my $i = 8; $i < $arr[7] + 8; $i++) {
         return "invalid ip"
             if $arr[$i] !~ /^[1-9]\d{1,2}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-        if ($arr[$i] =~ $vpn_regex) {
-            if (defined $ip) {
-                print "duplicate vpn ip address\n" if $debug;
-                next;
-            }
-            $ip = $arr[$i];
-        }
+        push @ips, $arr[$i];
     }
-    return "vpn ip not found"
-        unless defined $ip;
 
     # create user list
     my @users;
@@ -228,7 +220,7 @@ sub parse_req ($) {
         push @users, $u;
     }
 
-    return { cmd => $cmd, log_usr => $log_usr, ip => $ip, users => \@users };
+    return { cmd => $cmd, log_usr => $log_usr, ips => \@ips, users => \@users };
 }
 
 #
@@ -237,6 +229,20 @@ sub parse_req ($) {
 sub handle_req ($) {
     my ($req) = @_;
     my @users = @{ $req->{users} };
+
+    # select client ip belonging to vpn
+    my $ip;
+    for my $try_ip (@{ $req->{ips} }) {
+        next unless $try_ip =~ $vpn_regex;
+        if (defined $ip) {
+            print "duplicate vpn ip address\n" if $debug;
+            next;
+        }
+        $ip = $try_ip;
+    }
+    return "vpn ip not found"
+        unless defined $ip;
+    print "client vpn ip: $ip\n" if $debug;
 
     if ($req->{cmd} eq 'I') {
         # user login handler
