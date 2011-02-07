@@ -7,6 +7,10 @@
 use strict;
 use FindBin qw($Bin);
 require "$Bin/userwatch.inc.pm";
+
+#
+# require: perl-DBD-mysql, perl-LDAP
+#
 use DBI;
 use Net::LDAP;
 
@@ -276,6 +280,7 @@ sub mysql_connect () {
                 $uw_config{mysql_user}, $uw_config{mysql_pass})
 		or die "cannot connect to database\n";
     $dbh->{mysql_enable_utf8} = 1;
+    $dbh->{mysql_auto_reconnect} = 1;
     $dbh->{AutoCommit} = 0;
     $dbh->do("SET NAMES 'utf8'");
     %sth_cache = ();
@@ -439,6 +444,7 @@ sub main () {
         print "waiting for client...\n" if $debug;
         ($ssl, $conn) = ssl_accept($srv_sock, $ssl_ctx);
         next unless defined $ssl;
+        print "got someone!\n" if $debug;
 
         my $ok = 0;
         my $str = ssl_read_packet($ssl, $conn);

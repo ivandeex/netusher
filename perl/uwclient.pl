@@ -9,7 +9,9 @@ use FindBin qw($Bin);
 require "$Bin/userwatch.inc.pm";
 
 #
-# you can obtain RPM from
+# require: perl-User-Utmp
+#
+# you can obtain perl-User-Utmp RPM from
 # http://rpm.vitki.net/pub/centos/5/i386/repoview/perl-User-Utmp.html
 #
 use User::Utmp qw(:constants :utmpx);
@@ -182,6 +184,10 @@ sub main () {
     ssl_startup();
     $ssl_ctx = ssl_create_context($uw_config{client_pem}, $uw_config{ca_cert});
     ($ssl, $conn) = ssl_connect($uw_config{server}, $uw_config{port}, $ssl_ctx);
+    unless (defined $ssl) {
+        print "cannot connect to server\n";
+        return;
+    }
     print "connected\n";
     cron_job();
 }

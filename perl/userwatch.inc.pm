@@ -6,6 +6,9 @@
 
 use strict;
 
+#
+# require: perl-Net-SSLeay, perl-EV
+#
 use Errno;
 use Fcntl;
 use Net::SSLeay ();
@@ -139,7 +142,7 @@ sub ssl_check_die ($) {
 }
 
 sub ssl_sock_opts ($$) {
-    my ($conn, $nobuf) = @_;
+    my ($conn, $noblock) = @_;
 
     if (!$blocking_ssl) {
         # Set FD_CLOEXEC.
@@ -154,7 +157,7 @@ sub ssl_sock_opts ($$) {
         $_ = select($conn); $| = 1; select $_;
     }
 
-    if ($nobuf && !$blocking_ssl) {
+    if ($noblock && !$blocking_ssl) {
         # Set O_NONBLOCK.
         $_ = fcntl($conn, F_GETFL, 0)
             or die "fcntl F_GETFL: $!\n";  # 0 for error, 0e0 for 0.
@@ -279,7 +282,7 @@ sub ssl_listen ($) {
     listen($sock, SOMAXCONN)
         or die("listen ${port}: $!\n");
 
-    ssl_sock_opts($sock, 0);
+    ssl_sock_opts($sock, 1);
 
     return $sock;
 }
@@ -289,6 +292,12 @@ sub ssl_listen ($) {
 #
 sub ssl_accept ($$) {
     my ($sock, $ctx) = @_;
+
+    my $timeout = $uw_config{timeout};
+    my $vec = "";
+    vec($vec, fileno($sock), 1) = 1;
+    my ($nfound, $timeleft) = select($vec, $vec, undef, $timeout);
+    return unless $nfound;
 
     my $from = accept(my $conn, $sock);
     unless ($from) {
@@ -320,8 +329,18 @@ sub ssl_connect ($$$) {
         or die("$server: host not found\n");
     my $conn_params = sockaddr_in($port, $ip);
 
-    connect($sock, $conn_params)
-        or die("$server: cannot connect: $!\n");
+    ssl_sock_opts($sock, 1);
+
+    connect($sock, $conn_params);
+    my $timeout = $uw_config{timeout};
+    my $vec = "";
+    vec($vec, fileno($sock), 1) = 1;
+    my ($nfound, $timeleft) = select($vec, $vec, undef, $timeout);
+    if (!connect($sock, $conn_params)) {
+        print("$server: cannot connect: $!\n");
+        return;
+    }
+    print "connected to server\n" if $debug;
 
     ssl_sock_opts($sock, 1);
 
