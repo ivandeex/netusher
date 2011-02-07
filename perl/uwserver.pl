@@ -450,16 +450,16 @@ sub new_client () {
     debug("got someone!");
 
     my $ok = 0;
-    my $str = ssl_read_packet($ssl, $conn);
+    my $str = ssl_read_packet();
     if (defined $str) {
         my $req = parse_req($str);
         if (ref($req) eq 'HASH') {
             debug("request ok");
             my $ret = handle_req($req);
-            ssl_write_packet($ssl, $conn, $ret);
+            ssl_write_packet($ret);
         } else {
             info("invalid request (error:$req)");
-            ssl_write_packet($ssl, $conn, "invalid request");
+            ssl_write_packet("invalid request");
         }
     }
 

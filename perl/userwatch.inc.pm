@@ -17,6 +17,8 @@ use Net::SSLeay ();
 use Net::SSLeay::Handle;
 use Sys::Syslog;
 
+our (%loop, $ssl, $conn);
+
 our $CFG_ROOT = '/etc/userwatch';
 
 ##############################################
@@ -400,10 +402,11 @@ sub ssl_detach ($$) {
 }
 
 #
-# Safe reading and writing
+# Packet reading
 #
-sub ssl_read ($$$) {
-    my ($ssl, $conn, $bytes) = @_;
+
+sub ssl_read ($) {
+    my ($bytes) = @_;
 
     my $lines = "";
     my $timeout = $uw_config{timeout};
@@ -454,8 +457,40 @@ sub ssl_read ($$$) {
     return $lines;
 }
 
-sub ssl_write ($$$) {
-    my ($ssl, $conn, $write_buf) = @_;
+sub ssl_read_packet () {
+    my $hdr = ssl_read(5);
+    if ($hdr =~ /^(\d{4}):$/) {
+        my $bytes = $1 - 5;
+        if ($bytes > 0 && $bytes <= 8192) {
+            debug("request header: [$hdr]");
+            my $pkt = ssl_read($bytes);
+            if ($pkt =~ /\n$/) {
+                chomp $pkt;
+                debug("received: [$pkt]");
+                return $pkt;
+            }
+            debug("bad request body [$pkt]");
+            return;
+        }
+    }
+    debug("bad request header \"$hdr\"");
+    return;
+}
+
+#
+# Packet rwriting
+#
+
+sub ssl_write_packet ($) {
+    my ($pkt) = @_;
+    fail("packet too long") if length($pkt) >= 8192;
+    my $hdr = sprintf('%04d:', length($pkt) + 6);
+    debug("send packet:[${hdr}${pkt}]");
+    ssl_write($hdr . $pkt . "\n");
+}
+
+sub ssl_write ($) {
+    my ($write_buf) = @_;
 
     my $total = length($write_buf);
     debug("write $total bytes");
@@ -485,36 +520,6 @@ sub ssl_write ($$$) {
     }
 
     #print "\n";
-}
-
-sub ssl_read_packet ($$) {
-    my ($ssl, $conn) = @_;
-
-    my $hdr = ssl_read($ssl, $conn, 5);
-    if ($hdr =~ /^(\d{4}):$/) {
-        my $bytes = $1 - 5;
-        if ($bytes > 0 && $bytes <= 8192) {
-            debug("request header: [$hdr]");
-            my $pkt = ssl_read($ssl, $conn, $bytes);
-            if ($pkt =~ /\n$/) {
-                chomp $pkt;
-                debug("received: [$pkt]");
-                return $pkt;
-            }
-            debug("bad request body [$pkt]");
-            return;
-        }
-    }
-    debug("bad request header \"$hdr\"");
-    return;
-}
-
-sub ssl_write_packet ($$$) {
-    my ($ssl, $conn, $pkt) = @_;
-    fail("packet too long") if length($pkt) >= 8192;
-    my $hdr = sprintf('%04d:', length($pkt) + 6);
-    debug("send packet:[${hdr}${pkt}]");
-    ssl_write($ssl, $conn, $hdr . $pkt . "\n");
 }
 
 ##############################################

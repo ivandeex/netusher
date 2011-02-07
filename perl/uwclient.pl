@@ -146,8 +146,8 @@ sub create_request ($$;$) {
 #
 sub cron_job () {
     my $req = create_request("C", 1);
-    ssl_write_packet($ssl, $conn, $req);
-    return ssl_read_packet($ssl, $conn);
+    ssl_write_packet($req);
+    return ssl_read_packet();
 }
 
 sub user_login ($$$;$) {
@@ -160,8 +160,8 @@ sub user_login ($$$;$) {
     my $req = create_request("I", 0, {
                 method => $method, user => $user, pass => $pass, uid => $uid
                 });
-    ssl_write_packet($ssl, $conn, $req);
-    return ssl_read_packet($ssl, $conn);
+    ssl_write_packet($req);
+    return ssl_read_packet();
 }
 
 sub user_logout ($$) {
@@ -169,8 +169,8 @@ sub user_logout ($$) {
     my $req = create_request("O", 0, {
                 method => $method, user => $user, uid => 0
                 });
-    ssl_write_packet($ssl, $conn, $req);
-    return ssl_read_packet($ssl, $conn);    
+    ssl_write_packet($req);
+    return ssl_read_packet();
 }
 
 sub main () {
