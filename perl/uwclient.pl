@@ -16,7 +16,7 @@ require "$Bin/userwatch.inc.pm";
 #
 use User::Utmp qw(:constants :utmpx);
 
-our ($CFG_ROOT, $debug, %uw_config);
+our ($CFG_ROOT, %uw_config);
 our ($ssl_ctx, $ssl, $conn);
 our (%local_users, $passwd_modified_stamp);
 
@@ -28,7 +28,7 @@ sub get_ip_list () {
     my $ifconfig = "/sbin/ifconfig";
     $SIG{PIPE} = "IGNORE";
     my $pid = open(my $out, "$ifconfig 2>/dev/null |");
-    die "$ifconfig: executable not found\n" unless $pid;
+    fail("$ifconfig: executable not found") unless $pid;
     while (<$out>) {
         next unless m"^\s+inet addr:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+\w";
         next if $1 eq "127.0.0.1";
@@ -36,8 +36,7 @@ sub get_ip_list () {
     }
     close($out);
     my $kid = waitpid($pid, 0);
-    print "ip_list:" . join(',', @ip_list) . "\n"
-        if $debug;
+    debug("ip_list: %s", join(',', @ip_list));
     return @ip_list;
 }
 
@@ -52,10 +51,10 @@ sub get_local_users () {
     $passwd_modified_stamp = $modified;
 
     # if the file was modified, refresh the hash
-    print "updating local user list\n" if $debug;
+    debug("updating local user list");
     %local_users = ();
     open(my $passwd, $passwd_path)
-        or die "$passwd_path: cannot open\n";
+        or fail("$passwd_path: cannot open");
     while (<$passwd>) {
         next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):\d+:";
         $local_users{$1} = $2;
@@ -68,7 +67,6 @@ sub get_local_users () {
 #
 sub get_user_list () {
     # scan utmpx
-    print "user_list" if $debug;
     my @user_list;
 
     for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx()) {
@@ -103,10 +101,10 @@ sub get_user_list () {
                 uid => $uid,
                 };
         push @user_list, $u;
-        print ":[$user,$uid,$method,".$u->{beg_time}."]" if $debug;
+        debug("user_list next: user:%s uid:%s method:%s beg_time:%s",
+                $user, $uid, $method, $u->{beg_time});
     }
 
-    print ".\n" if $debug;
     return @user_list;
 }
 
@@ -156,7 +154,7 @@ sub user_login ($$$;$) {
     my ($method, $user, $pass, $uid) = @_;
     get_local_users();
     if (!$uw_config{also_local} && exists($local_users{$user})) {
-        print "$user: is local user\n" if $debug;
+        debug("$user: is local user");
         return "OK";
     }
     my $req = create_request("I", 0, {
@@ -177,18 +175,23 @@ sub user_logout ($$) {
 
 sub main () {
     my $config = "$CFG_ROOT/uwclient.conf";
-    read_config($config,
-                [ qw(server) ],
-                [ qw(port ca_cert client_pem also_local debug timeout) ]);
-    die "$config: server host undefined\n" unless $uw_config{server};
+    read_config($config, [ qw(
+                    server
+                )],
+                [ qw(
+                    port ca_cert client_pem also_local
+                    syslog stdout debug timeout
+                )]);
+    fail("$config: server host undefined") unless $uw_config{server};
+    log_init();
     ssl_startup();
     $ssl_ctx = ssl_create_context($uw_config{client_pem}, $uw_config{ca_cert});
     ($ssl, $conn) = ssl_connect($uw_config{server}, $uw_config{port}, $ssl_ctx);
     unless (defined $ssl) {
-        print "cannot connect to server\n";
+        info("cannot connect to server");
         return;
     }
-    print "connected\n";
+    debug("connected");
     cron_job();
 }
 
@@ -205,7 +208,7 @@ sub cleanup () {
     ssl_free_context($ssl_ctx);
     undef $ssl_ctx;
 
-    print "bye\n";
+    info("bye");
 }
 
 $SIG{INT} = $SIG{TERM} = $SIG{QUIT} = \&cleanup;

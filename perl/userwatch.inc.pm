@@ -9,14 +9,15 @@ use strict;
 #
 # require: perl-Net-SSLeay, perl-EV
 #
+use Carp;
 use Errno;
 use Fcntl;
+use Socket;
 use Net::SSLeay ();
 use Net::SSLeay::Handle;
-use Socket;
+use Sys::Syslog;
 
 our $CFG_ROOT = '/etc/userwatch';
-our $debug = 0;
 our $blocking_ssl = 0;
 
 ##############################################
@@ -28,6 +29,8 @@ our %uw_config = (
         port        => 7501,
         ca_cert     => "$CFG_ROOT/ca.crt",
         debug       => 0,
+        syslog      => 1,
+        stdout      => 0,
         timeout     => 5,
         # client parameters
         server      => undef,
@@ -58,26 +61,62 @@ sub read_config ($$$) {
     $h_required{$_} = 1 for (@$required);
 
     open (my $file, $config)
-        or die "$config: configuration file not found\n";
+        or fail("$config: configuration file not found");
     while (<$file>) {
         next if /^\s*$/ || /^\s*#/;
         if (/^\s*(\w+)\s*=\s*(\S+)\s*$/) {
             my ($param, $value) = ($1, $2);
-            die "$config: unknown parameter \"$param\"\n"
+            fail("$config: unknown parameter \"$param\"")
                 if !exists($uw_config{$param}) || !exists($h_allowed{$param});
             if ($uw_config{$param} !~ /^\d+$/ || $value =~ /^\d+$/) {
                 $uw_config{$param} = $value;
                 next;
             }
         }
-        die "$config: configuration error in line $.\n";
+        fail("$config: configuration error in line $.");
     }
     close ($file);
+
     for my $param (sort keys %h_required) {
-        die "$config: missing required parameter \"$param\"\n"
+        fail("$config: missing required parameter \"$param\"")
             unless defined $uw_config{$param};
     }
-    $debug = $uw_config{debug};
+
+    $uw_config{stdout} = 1 unless $uw_config{syslog};
+}
+
+##############################################
+# Logging
+#
+
+sub log_init () {
+    return unless $uw_config{syslog};
+    my $prog = $0;
+    $prog =~ s!^.*/!!;
+    $prog =~ s!\..*$!!;
+    openlog($prog, "cons,pid", "daemon");
+}
+
+sub fail ($@) {
+    my $fmt = shift;
+    my $msg = "[ fail] " . sprintf($fmt, @_);
+    syslog("err", $msg) if $uw_config{syslog};
+    confess($msg."\n");
+}
+
+sub info ($@) {
+    my $fmt = shift;
+    my $msg = "[ info] " . sprintf($fmt, @_);
+    syslog("notice", $msg) if $uw_config{syslog};
+    print($msg."\n") if $uw_config{stdout};
+}
+
+sub debug ($@) {
+    return unless $uw_config{debug};
+    my $fmt = shift;
+    my $msg = "[debug] " . sprintf($fmt, @_);
+    syslog("info", $msg) if $uw_config{syslog};
+    print($msg."\n") if $uw_config{stdout};    
 }
 
 ##############################################
@@ -94,26 +133,26 @@ sub ssl_startup () {
 
     Net::SSLeay::load_error_strings();
     eval 'no warnings "redefine"; sub Net::SSLeay::load_error_strings () {}';
-    die $@ if $@;
+    fail($@) if $@;
 
     Net::SSLeay::SSLeay_add_ssl_algorithms();
     eval 'no warnings "redefine"; sub Net::SSLeay::SSLeay_add_ssl_algorithms () {}';
-    die $@ if $@;
+    fail($@) if $@;
 
     #Net::SSLeay::ENGINE_load_builtin_engines();
     #eval 'no warnings "redefine"; sub Net::SSLeay::ENGINE_load_builtin_engines () {}';
-    #die $@ if $@;
+    #fail($@) if $@;
 
     #Net::SSLeay::ENGINE_register_all_complete();
     #eval 'no warnings "redefine"; sub Net::SSLeay::ENGINE_register_all_complete () {}';
-    #die $@ if $@;
+    #fail($@) if $@;
 
     Net::SSLeay::randomize();
     eval 'no warnings "redefine"; sub Net::SSLeay::randomize (;$$) {}';
-    die $@ if $@;
+    fail($@) if $@;
 
     $| = 1;
-    if ($debug > 1) {
+    if ($uw_config{debug} > 1) {
         $Net::SSLeay::trace = 3;
         Net::SSLeay::Handle->debug(1);
     }
@@ -137,7 +176,7 @@ sub ssl_get_error () {
 sub ssl_check_die ($) {
     my ($message) = @_;
     my ($errors, $errnos) = ssl_get_error();
-    die "${message}: ${errors}" if @$errnos;
+    fail("${message}: ${errors}") if @$errnos;
     return;
 }
 
@@ -147,9 +186,9 @@ sub ssl_sock_opts ($$) {
     if (!$blocking_ssl) {
         # Set FD_CLOEXEC.
         $_ = fcntl($conn, F_GETFD, 0)
-            or die "fcntl: $!\n";
+            or fail("fcntl: $!");
         fcntl($conn, F_SETFD, $_ | FD_CLOEXEC)
-            or die "fnctl: $!\n";
+            or fail("fnctl: $!");
     }
 
     if (1) {
@@ -160,9 +199,9 @@ sub ssl_sock_opts ($$) {
     if ($noblock && !$blocking_ssl) {
         # Set O_NONBLOCK.
         $_ = fcntl($conn, F_GETFL, 0)
-            or die "fcntl F_GETFL: $!\n";  # 0 for error, 0e0 for 0.
+            or fail("fcntl F_GETFL: $!");  # 0 for error, 0e0 for 0.
         fcntl($conn, F_SETFL, $_ | O_NONBLOCK)
-            or die "fcntl F_SETFL O_NONBLOCK: $!\n";  # 0 for error, 0e0 for 0.
+            or fail("fcntl F_SETFL O_NONBLOCK: $!");  # 0 for error, 0e0 for 0.
     }
 }
 
@@ -194,7 +233,7 @@ sub ssl_create_context (;$$) {
         # Server and client can use PEM (cert+key) for secure connection
         $pem_path = "$CFG_ROOT/$pem_path"
             unless $pem_path =~ m'^/';
-        die "$pem_path: pem certificate not found\n"
+        fail("$pem_path: pem certificate not found")
             unless -r $pem_path;
 
         # Load certificate. Avoid password prompt.
@@ -212,14 +251,14 @@ sub ssl_create_context (;$$) {
         # Server and client can use CA certificate to check other side
         $ca_crt_path = "$CFG_ROOT/$ca_crt_path"
             unless $ca_crt_path =~ m'^/';
-        die "$ca_crt_path: ca certificate not found\n"
+        fail("$ca_crt_path: ca certificate not found")
             unless -r $ca_crt_path;
         my ($ca_file, $ca_dir) = (-d $ca_crt_path) ?
                                     (undef, $ca_crt_path) : ($ca_crt_path, undef);
 
         Net::SSLeay::CTX_load_verify_locations($ctx, $ca_file, $ca_dir);
         ssl_check_die("SSL CTX_load_verify_locations");
-        print "enable verification file:$ca_file dir:$ca_dir\n" if $debug;
+        debug("enable verification file:$ca_file dir:$ca_dir");
 
         my $mode = &Net::SSLeay::VERIFY_PEER
                     | &Net::SSLeay::VERIFY_FAIL_IF_NO_PEER_CERT
@@ -233,11 +272,11 @@ sub ssl_create_context (;$$) {
 
 sub ssl_cert_verify_cb {
     my ($ok, $x509_store_ctx) = @_;
-    if ($debug) {
+    if ($uw_config{debug}) {
         my $cert = Net::SSLeay::X509_STORE_CTX_get_current_cert($x509_store_ctx);
         my $subj = Net::SSLeay::X509_NAME_oneline(Net::SSLeay::X509_get_subject_name($cert));
         my $cname = ($subj =~ m'/CN=([^/]+)/') ? $1 : $subj;
-        print " [verification ok:$ok cname:$cname] ";
+        debug("verification ok:$ok cname:$cname");
     }
     return $ok;
 }
@@ -274,13 +313,13 @@ sub ssl_listen ($) {
 
     my $sock;
     socket($sock, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
-        or die("socket: $!\n");
+        or fail("socket: $!");
     setsockopt($sock, SOL_SOCKET, SO_REUSEADDR, 1)
-        or die("setsockopt SOL_SOCKET, SO_REUSEADDR: $!\n");
+        or fail("setsockopt SOL_SOCKET, SO_REUSEADDR: $!");
     bind($sock, pack_sockaddr_in($port, INADDR_ANY))
-        or die("bind ${port}: $!\n");
+        or fail("bind ${port}: $!");
     listen($sock, SOMAXCONN)
-        or die("listen ${port}: $!\n");
+        or fail("listen ${port}: $!");
 
     ssl_sock_opts($sock, 1);
 
@@ -301,7 +340,7 @@ sub ssl_accept ($$) {
 
     my $from = accept(my $conn, $sock);
     unless ($from) {
-        print "accept: $!\n" if $debug;
+        debug("accept: $!");
         return;
     }
 
@@ -323,10 +362,10 @@ sub ssl_connect ($$$) {
 
     my $sock;
     socket($sock, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
-        or die("socket: $!\n");
+        or fail("socket: $!");
 
     my $ip = gethostbyname($server)
-        or die("$server: host not found\n");
+        or fail("$server: host not found");
     my $conn_params = sockaddr_in($port, $ip);
 
     ssl_sock_opts($sock, 1);
@@ -337,10 +376,10 @@ sub ssl_connect ($$$) {
     vec($vec, fileno($sock), 1) = 1;
     my ($nfound, $timeleft) = select($vec, $vec, undef, $timeout);
     if (!connect($sock, $conn_params)) {
-        print("$server: cannot connect: $!\n");
+        info("$server: cannot connect: $!");
         return;
     }
-    print "connected to server\n" if $debug;
+    debug("connected to server");
 
     ssl_sock_opts($sock, 1);
 
@@ -377,14 +416,14 @@ sub ssl_read ($$$) {
 
     my $lines = "";
     my $timeout = $uw_config{timeout};
-    print "read returned: " if $debug;
+    #print "read returned: ";
 
     while ($bytes > 0) {
         my $vec = "";
         vec($vec, fileno($conn), 1) = 1;
         my ($nfound, $timeleft) = select($vec, $vec, undef, $timeout);
         $timeout = $timeleft if $timeleft;
-        #print "{$nfound/$timeleft} " if $debug;
+        #print "{$nfound/$timeleft} ";
 
         # Repeat read() until EAGAIN before select()ing for more. SSL may already be
         # holding the last packet in its buffer, so if we aren't careful to decode
@@ -402,16 +441,16 @@ sub ssl_read ($$$) {
             my $read_buf = Net::SSLeay::read($ssl, $bytes);
             ssl_check_die("SSL read");
             if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
-                #print "[again], " if $debug;
-                #print "!" if $debug;
+                #print "[again], ";
+                #print "!";
                 next;                
             }
-            die "read: $!\n"
+            fail("read failed: $!")
                 unless defined $read_buf;
             if (defined $read_buf) {
                 my $len = length($read_buf);
                 if ($len == 0) {
-                    print "\nconnection terminated\n" if $debug;
+                    debug("connection terminated");
                     return;
                 }
                 $lines .= $read_buf;
@@ -420,8 +459,7 @@ sub ssl_read ($$$) {
         }
     }
 
-    print "\n" if $debug;
-    print $lines if $debug;
+    #print "\n";
     return $lines;
 }
 
@@ -429,7 +467,8 @@ sub ssl_write ($$$) {
     my ($ssl, $conn, $write_buf) = @_;
 
     my $total = length($write_buf);
-    print "write ($total) returned: " if $debug;
+    debug("write $total bytes");
+    #print "write returned: ";
     my $timeout = $uw_config{timeout};
 
     while ($total > 0) {
@@ -437,24 +476,24 @@ sub ssl_write ($$$) {
         vec($vec, fileno($conn), 1) = 1;
         my ($nfound, $timeleft) = select($vec, $vec, undef, $timeout);
         $timeout = $timeleft if $timeleft;
-        #print "{$nfound/$timeleft} " if $debug;
+        #print "{$nfound/$timeleft} ";
 
         my $bytes = Net::SSLeay::write($ssl, $write_buf);
         ssl_check_die("SSL write");
         if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
-            #print "[again], " if $debug;
-            #print "!" if $debug;
+            #print "[again], ";
+            #print "!";
             next;
         }
-        die "write error: $!\n" unless $bytes;
-        print $bytes > 0 ? $bytes.", " : "." if $debug;
+        fail("write error: $!") unless $bytes;
+        #print $bytes > 0 ? $bytes.", " : ".";
         if ($bytes > 0) {
             substr($write_buf, 0, $bytes, "");
             $total -= $bytes;
         }
     }
 
-    print "\n" if $debug;
+    #print "\n";
 }
 
 sub ssl_read_packet ($$) {
@@ -464,7 +503,7 @@ sub ssl_read_packet ($$) {
         my $pkt = Net::SSLeay::ssl_read_until($ssl, "\n");
         return unless $pkt =~ /^\d{4}:/;
         $pkt = substr($pkt, 5, length($pkt) - 6);
-        print "received: [$pkt]\n" if $debug;
+        debug("received: [$pkt]");
         return $pkt;
     }
 
@@ -472,26 +511,26 @@ sub ssl_read_packet ($$) {
     if ($hdr =~ /^(\d{4}):$/) {
         my $bytes = $1 - 5;
         if ($bytes > 0 && $bytes <= 8192) {
-            print "request header: [$hdr]\n" if $debug;
+            debug("request header: [$hdr]");
             my $pkt = ssl_read($ssl, $conn, $bytes);
             if ($pkt =~ /\n$/) {
                 chomp $pkt;
-                print "received: [$pkt]\n" if $debug;
+                debug("received: [$pkt]");
                 return $pkt;
             }
-            print "bad request body [$pkt]\n" if $debug;
+            debug("bad request body [$pkt]");
             return;
         }
     }
-    print "bad request header \"$hdr\"\n" if $debug;
+    debug("bad request header \"$hdr\"");
     return;
 }
 
 sub ssl_write_packet ($$$) {
     my ($ssl, $conn, $pkt) = @_;
-    die "packet too long\n" if length($pkt) >= 8192;
+    fail("packet too long") if length($pkt) >= 8192;
     my $hdr = sprintf('%04d:', length($pkt) + 6);
-    print "send packet:[${hdr}${pkt}]\n" if $debug;
+    debug("send packet:[${hdr}${pkt}]");
     if ($blocking_ssl) {
         Net::SSLeay::ssl_write_all($ssl, $hdr . $pkt . "\n");
     } else {
