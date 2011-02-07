@@ -23,8 +23,8 @@ my ($cleanup_done);
 #
 
 my %login_method_weight = (
-    'XDM' => 5,
-    'RSH' => 4,
+    'XDM' => 4,
+    'RSH' => 3,
     'CON' => 2,
     'XTY' => 1,
     );
@@ -228,7 +228,6 @@ sub parse_req ($) {
 #
 sub handle_req ($) {
     my ($req) = @_;
-    my @users = @{ $req->{users} };
 
     # select client ip belonging to vpn
     my $ip;
@@ -268,62 +267,71 @@ sub handle_req ($) {
         return $msg if $msg;
 
         # add this user to the beginning of the big list
-        for (my $i = 0; $i <= $#users; $i++) {
-            if ($users[$i]->{user} eq $log_usr->{user}) {
-                splice @users, $i, 1;
-            }
-        }
-        unshift @users, $log_usr;
+        unshift @{ $req->{users} }, $log_usr;
     }
     elsif ($req->{cmd} eq 'O') {
         # logout
     }
 
-    # update database from the array of users
+    update_user_mapping($req->{cmd}, $req->{users});
+    return "OK";
+}
+
+#
+# update user mapping in database
+#
+sub update_user_mapping ($$) {
+    my ($cmd, $users) = @_;
+
+    return unless @$users;
+
     # currently only one "main" user per host is allowed.
     # we preferr GDM/KDM users, and if several users are active,
     # we prefer the one that has logged in earlier
-    if (@users) {
-        my $best;
-        for (my $i = 0; $i <= $#users; $i++) {
-            my $u = $users[$i];
-            # skip local users and users with id that does not match
-            unless ($uw_config{also_local}) {
-                my $uid = ldap_get_uid($u->{user});
-                unless (defined $uid) {
-                    printf("%s: skip local user\n", $u->{user}) if $debug;
-                    next;
-                }
-                if (defined($u->{uid}) && $u->{uid} ne '' && $u->{uid} != $uid) {
-                    printf("%s: uid %s does not match ldap %s\n",
-                            $u->{user}, $u->{uid}, $uid)
-                        if $debug;
-                    next;
-                }
-            }
+    my $best;
+    for (my $i = 0; $i < scalar(@$users); $i++) {
+        my $u = $users->[$i];
 
-            if (!defined($best)) {
-                $best = $u;
+        # skip local users and users with id that does not match
+        unless ($uw_config{also_local}) {
+            my $uid = ldap_get_uid($u->{user});
+            unless (defined $uid) {
+                printf("%s: skip local user\n", $u->{user}) if $debug;
+                next;
             }
-            elsif ($best->{method} eq $u->{method}) {
-                $best = $u if $best->{beg_time} > $u->{beg_time};
-            }
-            else {
-                my $best_weight = $login_method_weight{$best->{method}};
-                $best_weight = 0 unless defined $best_weight;
-                my $u_weight = $login_method_weight{$u->{method}};
-                $u_weight = 0 unless defined $u_weight;
-                $best = $u if $best_weight < $u_weight;
+            if (defined($u->{uid}) && $u->{uid} ne '' && $u->{uid} != $uid) {
+                printf("%s: uid %s does not match ldap %s\n",
+                        $u->{user}, $u->{uid}, $uid)
+                    if $debug;
+                next;
             }
         }
-        if (defined($best) && $debug) {
-            printf("best user: user:%s method:%s id:%s beg_time:%s\n",
-                    $best->{user}, $best->{method}, $best->{uid},
-                    $best->{beg_time});
+
+        if (!defined($best)) {
+            $best = $u;
+        }
+        elsif ($best->{method} eq $u->{method}) {
+            $best = $u if $best->{beg_time} > $u->{beg_time};
+        }
+        else {
+            my $best_weight = $login_method_weight{$best->{method}};
+            $best_weight = 0 unless defined $best_weight;
+            my $u_weight = $login_method_weight{$u->{method}};
+            $u_weight = 0 unless defined $u_weight;
+            $best = $u if $best_weight < $u_weight;
         }
     }
 
-    return "OK";
+    unless (defined $best) {
+        print "ldap users not found\n" if $debug;
+        return;
+    }
+
+    if ($debug) {
+        printf("best user: user:%s method:%s id:%s beg_time:%s\n",
+                $best->{user}, $best->{method}, $best->{uid},
+                $best->{beg_time});
+    }
 }
 
 #
