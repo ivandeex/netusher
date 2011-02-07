@@ -16,6 +16,7 @@ use User::Utmp qw(:constants :utmpx);
 
 our ($CFG_ROOT, $debug, %uw_config);
 our ($ssl_ctx, $ssl, $conn);
+our (%local_users, $passwd_modified_stamp);
 
 #
 # scan interfaces
@@ -39,29 +40,40 @@ sub get_ip_list () {
 }
 
 #
+# get list of local user names from /etc/passwd
+#
+sub get_local_users () {
+    # check whether file was modified
+    my $passwd_path = "/etc/passwd";
+    my $modified = -M($passwd_path);
+    return if $modified eq $passwd_modified_stamp;
+    $passwd_modified_stamp = $modified;
+
+    # if the file was modified, refresh the hash
+    print "updating local user list\n" if $debug;
+    %local_users = ();
+    open(my $passwd, $passwd_path)
+        or die "$passwd_path: cannot open\n";
+    while (<$passwd>) {
+        next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):\d+:";
+        $local_users{$1} = $2;
+    }
+    close($passwd);
+}
+
+#
 # get list of active users
 #
 sub get_user_list () {
-    # read user names from /etc/passwd
-    my %local_uid;
-    open(my $passwd, "/etc/passwd")
-        or die "/etc/passwd: cannot open\n";
-    while (<$passwd>) {
-        next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):\d+:";
-        $local_uid{$1} = $2;
-    }
-    close($passwd);
-
     # scan utmpx
     print "user_list" if $debug;
     my @user_list;
 
-    for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx) {
+    for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx()) {
         next unless $ut->{ut_type} == USER_PROCESS;
-
         # filter out local users
         my $user = $ut->{ut_user};
-        next if !$uw_config{also_local} && exists($local_uid{$user});
+        next if !$uw_config{also_local} && exists($local_users{$user});
 
         # detect login methos
         my $method;
@@ -70,12 +82,13 @@ sub get_user_list () {
         elsif ($id =~ m"^\d+$") { $method = "CON" }
         elsif ($id =~ m"^:\d+(\.\d+)?$") { $method = "XDM" }
         elsif ($id =~ m"^/\d+$") { $method = "XTY" }
+        elsif ($ut->{ut_addr}) { $method = "RSH" }
         else { $method = "UNK" }
 
         # detect user id
         my $uid = "";
-        if (exists $local_uid{$user}) {
-            $uid = $local_uid{$user};
+        if (exists $local_users{$user}) {
+            $uid = $local_users{$user};
         } else {
             my ($xname, $xpass, $xuid) = getpwnam($user);
             $uid = $xuid if defined $xuid;
@@ -113,6 +126,7 @@ sub create_request ($$;$) {
             . join(':', @ip_list) . ":~:";
 
     if ($do_get_list) {
+        get_local_users();
         my (@user_list) = get_user_list();
         $line .= sprintf('%03d', $#user_list + 1);
         for my $u (@user_list) {
@@ -138,6 +152,11 @@ sub cron_job () {
 
 sub user_login ($$$;$) {
     my ($method, $user, $pass, $uid) = @_;
+    get_local_users();
+    if (!$uw_config{also_local} && exists($local_users{$user})) {
+        print "$user: is local user\n" if $debug;
+        return "OK";
+    }
     my $req = create_request("I", 0, {
                 method => $method, user => $user, pass => $pass, uid => $uid
                 });

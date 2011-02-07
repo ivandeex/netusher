@@ -17,6 +17,19 @@ our ($dbh, $ldap, %uid_cache, $vpn_regex);
 my ($cleanup_done);
 
 #
+# Currently only one "main" user per host is allowed.
+# We prefer GDM/KDM logins to SSH logins.
+# If several users are active, prefer user which has logged in earlier.
+#
+
+my %login_method_weight = (
+    'XDM' => 5,
+    'RSH' => 4,
+    'CON' => 2,
+    'XTY' => 1,
+    );
+
+#
 # connection to ldap for browsing
 #
 sub ldap_init () {
@@ -54,9 +67,9 @@ sub ldap_connect ($$$$) {
     $ldap_conn->unbind() if $just_check;
 
     if ($debug) {
-        print sprintf("ldap auth uri:%s tls:%s bind:%s pass:%s returns: %s\n",
-                    $uw_config{ldap_uri}, $uw_config{ldap_start_tls},
-                    $bind_dn, $pass, $res->error())
+        printf("ldap auth uri:%s tls:%s bind:%s pass:%s returns: %s\n",
+                $uw_config{ldap_uri}, $uw_config{ldap_start_tls},
+                $bind_dn, $pass, $res->error())
     }
     return "invalid password" if $res->code();
 
@@ -76,7 +89,7 @@ sub ldap_get_uid ($) {
     if (exists($uid_cache{$user})) {
         if ($stamp - $uid_cache{$user}{stamp} < $uw_config{cache_retention}) {
             $uid = $uid_cache{$user}{uid};
-            print "ldap_get_uid ($user) = ($uid) (from cache)\n" if $debug;
+            print "ldap get uid user:$user uid:$uid from cache\n" if $debug;
             return $uid;
         }
         delete $uid_cache{$user};
@@ -111,20 +124,19 @@ sub ldap_get_uid ($) {
         print "ldap get uid user:$user server down\n" if $debug;
         return;
     }
-    my $entry = $res->pop_entry();
-    if (!$res->code() && $entry) {
-        $uid  = $entry->get_value($uw_config{ldap_attr_uid});
-    }
-
-    # update cache
-    if (defined $uid) {
+    if (!$res->code()) {
+        my $entry = $res->pop_entry();
+        if ($entry) {
+            $uid  = $entry->get_value($uw_config{ldap_attr_uid});
+        }
+        # update cache with defined or undefined uid
         $uid_cache{$user}{uid} = $uid;
         $uid_cache{$user}{stamp} = $stamp;
     }
 
     if ($debug) {
-        print sprintf("ldap_get_uid user:%s uid:%s message:%s\n",
-                        $user, $uid, $res->error());
+        printf("ldap_get_uid user:%s uid:%s message:%s\n",
+                $user, $uid, $res->error());
     }
 
     return $uid;
@@ -232,10 +244,21 @@ sub handle_req ($) {
 
         # first, verify that user exists at all
         my $uid = ldap_get_uid($log_usr->{user});
-        return "user not found" unless defined $uid;
+        return "user not found"
+            unless defined $uid;
+
+        # verify that user id matches ldap
+        if (defined($log_usr->{uid}) && $log_usr->{uid} ne ''
+                && $log_usr->{uid} != $uid) {
+            printf("%s: uid %s does not match ldap %s\n",
+                   $log_usr->{user}, $log_usr->{uid}, $uid)
+                if $debug;
+            return "invalid uid";
+        }
 
         # verify user password
-        my ($msg) = ldap_connect(undef, $log_usr->{user}, $log_usr->{pass}, 1);
+        my ($msg, $dummy_conn) = ldap_connect(undef, $log_usr->{user},
+                                                $log_usr->{pass}, 1);
         return $msg if $msg;
 
         # add this user to the beginning of the big list
@@ -251,6 +274,49 @@ sub handle_req ($) {
     }
 
     # update database from the array of users
+    # currently only one "main" user per host is allowed.
+    # we preferr GDM/KDM users, and if several users are active,
+    # we prefer the one that has logged in earlier
+    if (@users) {
+        my $best;
+        for (my $i = 0; $i <= $#users; $i++) {
+            my $u = $users[$i];
+            # skip local users and users with id that does not match
+            unless ($uw_config{also_local}) {
+                my $uid = ldap_get_uid($u->{user});
+                unless (defined $uid) {
+                    printf("%s: skip local user\n", $u->{user}) if $debug;
+                    next;
+                }
+                if (defined($u->{uid}) && $u->{uid} ne '' && $u->{uid} != $uid) {
+                    printf("%s: uid %s does not match ldap %s\n",
+                            $u->{user}, $u->{uid}, $uid)
+                        if $debug;
+                    next;
+                }
+            }
+
+            if (!defined($best)) {
+                $best = $u;
+            }
+            elsif ($best->{method} eq $u->{method}) {
+                $best = $u if $best->{beg_time} > $u->{beg_time};
+            }
+            else {
+                my $best_weight = $login_method_weight{$best->{method}};
+                $best_weight = 0 unless defined $best_weight;
+                my $u_weight = $login_method_weight{$u->{method}};
+                $u_weight = 0 unless defined $u_weight;
+                $best = $u if $best_weight < $u_weight;
+            }
+        }
+        if (defined($best) && $debug) {
+            printf("best user: user:%s method:%s id:%s beg_time:%s\n",
+                    $best->{user}, $best->{method}, $best->{uid},
+                    $best->{beg_time});
+        }
+    }
+
     return "OK";
 }
 
@@ -266,7 +332,7 @@ sub main () {
                 [ qw(
                     port ca_cert server_pem mysql_port debug timeout
                     ldap_attr_user ldap_attr_uid ldap_start_tls
-                    cache_retention
+                    cache_retention also_local
                 ) ]);
 
     # create regular expression for vpn network
