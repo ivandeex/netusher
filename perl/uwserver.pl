@@ -12,7 +12,8 @@ use Net::LDAP;
 
 our ($CFG_ROOT, $debug, %uw_config);
 our ($ssl_ctx, $srv_sock, $ssl, $conn);
-our ($dbh, $ldap, %uid_cache, $vpn_regex);
+our ($dbh, %sth_cache);
+our ($ldap, %uid_cache, $vpn_regex);
 
 my ($cleanup_done);
 
@@ -23,11 +24,12 @@ my ($cleanup_done);
 #
 
 my %login_method_weight = (
-    'XDM' => 4,
-    'RSH' => 3,
+    'XDM' => 5,
+    'RSH' => 4,
     'CON' => 2,
     'XTY' => 1,
     );
+my $min_login_weight = 5;
 
 #
 # connection to ldap for browsing
@@ -143,19 +145,6 @@ sub ldap_get_uid ($) {
 }
 
 #
-# connect to mysql.
-#
-sub mysql_connect () {
-    $dbh = DBI->connect(
-                "DBI:mysql:$uw_config{mysql_db};host=$uw_config{mysql_host}",
-                $uw_config{mysql_user}, $uw_config{mysql_pass})
-		or die "cannot connect to database\n";
-    $dbh->{mysql_enable_utf8} = 1;
-    $dbh->{AutoCommit} = 1;
-    $dbh->do("SET NAMES 'utf8'");
-}
-
-#
 # parse request string.
 #
 sub parse_req ($) {
@@ -230,18 +219,18 @@ sub handle_req ($) {
     my ($req) = @_;
 
     # select client ip belonging to vpn
-    my $ip;
-    for my $try_ip (@{ $req->{ips} }) {
-        next unless $try_ip =~ $vpn_regex;
-        if (defined $ip) {
+    my $vpn_ip;
+    for my $ip (@{ $req->{ips} }) {
+        next unless $ip =~ $vpn_regex;
+        if (defined $vpn_ip) {
             print "duplicate vpn ip address\n" if $debug;
             next;
         }
-        $ip = $try_ip;
+        $vpn_ip = $ip;
     }
     return "vpn ip not found"
-        unless defined $ip;
-    print "client vpn ip: $ip\n" if $debug;
+        unless defined $vpn_ip;
+    print "client vpn ip: $vpn_ip\n" if $debug;
 
     if ($req->{cmd} eq 'I') {
         # user login handler
@@ -273,22 +262,62 @@ sub handle_req ($) {
         # logout
     }
 
-    update_user_mapping($req->{cmd}, $req->{users});
+    update_user_mapping($req->{cmd}, $vpn_ip, $req->{users});
+    purge_expired_users();
     return "OK";
+}
+
+#
+# connect to mysql.
+#
+sub mysql_connect () {
+    $dbh = DBI->connect(
+                "DBI:mysql:$uw_config{mysql_db};host=$uw_config{mysql_host}",
+                $uw_config{mysql_user}, $uw_config{mysql_pass})
+		or die "cannot connect to database\n";
+    $dbh->{mysql_enable_utf8} = 1;
+    $dbh->{AutoCommit} = 0;
+    $dbh->do("SET NAMES 'utf8'");
+    %sth_cache = ();
+}
+
+sub mysql_execute ($@) {
+    my ($sql, @params) = @_;
+    my $sth = $sth_cache{$sql};
+    unless (defined $sth) {
+        $sth = $dbh->prepare($sql);
+        $sth_cache{$sql} = $sth;
+    }
+    my $ok = { $sth->execute(@params) };
+    my $num = $sth->rows();
+    if (!$ok) {
+        printf("mysql error: %s\n", $sth->errstr());
+        $num = -1;
+    }
+    if ($debug) {
+        printf("execute: %s\n\t((%s)) = \"%s\"\n", $sql,
+            join(',', map { defined($_) ? "\"$_\"" : "NULL" } @params),
+            $num);
+    }
+    return $sth;
+}
+
+sub mysql_commit () {
+    eval { $dbh->commit(); };
 }
 
 #
 # update user mapping in database
 #
-sub update_user_mapping ($$) {
-    my ($cmd, $users) = @_;
+sub update_user_mapping ($$$) {
+    my ($cmd, $vpn_ip, $users) = @_;
 
-    return unless @$users;
-
+    #
     # currently only one "main" user per host is allowed.
     # we preferr GDM/KDM users, and if several users are active,
     # we prefer the one that has logged in earlier
-    my $best;
+    #
+    my ($best);
     for (my $i = 0; $i < scalar(@$users); $i++) {
         my $u = $users->[$i];
 
@@ -314,24 +343,65 @@ sub update_user_mapping ($$) {
             $best = $u if $best->{beg_time} > $u->{beg_time};
         }
         else {
-            my $best_weight = $login_method_weight{$best->{method}};
-            $best_weight = 0 unless defined $best_weight;
-            my $u_weight = $login_method_weight{$u->{method}};
-            $u_weight = 0 unless defined $u_weight;
-            $best = $u if $best_weight < $u_weight;
+            $best = $u if login_weight($best) < login_weight($u);
         }
     }
 
-    unless (defined $best) {
-        print "ldap users not found\n" if $debug;
-        return;
-    }
+    my $best_weight = login_weight($best);
+    $cmd = 'O' if $best_weight < $min_login_weight;
 
     if ($debug) {
-        printf("best user: user:%s method:%s id:%s beg_time:%s\n",
+        if (defined $best) {
+            printf("best: user:%s method:%s id:%s beg_time:%s weight:%s cmd:%s\n",
                 $best->{user}, $best->{method}, $best->{uid},
-                $best->{beg_time});
+                $best->{beg_time}, $best_weight, $cmd);
+        } else {
+            print "ldap users not found\n" if $debug;
+        }
     }
+
+    if ($best && ($cmd eq 'I' || $cmd eq 'C')) {
+        # if there were previous active users, end their sessions
+        mysql_execute("UPDATE uw_users
+            SET end_time = FROM_UNIXTIME(?), running = 0
+            WHERE vpn_ip = ? AND running = 1 AND beg_time < FROM_UNIXTIME(?)",
+            $best->{beg_time} - 1, $vpn_ip, $best->{beg_time}
+            );
+
+        # insert or update existing record
+        mysql_execute("INSERT INTO uw_users
+            (vpn_ip,username,beg_time,end_time,method,running)
+            VALUES (?, ?, FROM_UNIXTIME(?), NOW(), ?, 1)
+            ON DUPLICATE KEY UPDATE
+            end_time = NOW(), running = 1",
+            $vpn_ip, $best->{user}, $best->{beg_time}, $best->{method}
+            );
+
+        mysql_commit();
+    }
+
+    # logout: update existing user record
+    if ($best && $cmd eq 'O') {
+        mysql_execute("UPDATE uw_users SET end_time = NOW(), running = 0
+            WHERE beg_time = FROM_UNIXTIME(?)
+            AND username = ? AND vpn_ip = ?",
+            $best->{beg_time}, $best->{user}, $vpn_ip);
+        mysql_commit();
+    }
+}
+
+sub purge_expired_users () {
+    mysql_execute(sprintf("
+        UPDATE uw_users SET running = 0
+        WHERE running = 1 AND end_time < DATE_SUB(NOW(), INTERVAL %s SECOND)",
+        $uw_config{cache_retention}));
+}
+
+sub login_weight ($) {
+    my ($u) = @_;
+    return 0 if !defined($u) || !defined($u->{method});
+    my $weight = $login_method_weight{$u->{method}};
+    return defined($weight) ? $weight : 0;
 }
 
 #

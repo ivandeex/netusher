@@ -16,7 +16,19 @@ CREATE TABLE uw_openvpn (
     vpn_ip      varchar(16),
     rx_bytes    int(8),
     tx_bytes    int(8),
-    PRIMARY KEY (beg_time, cname)
+    PRIMARY KEY (beg_time, cname),
+    KEY (vpn_ip)
 );
 
+DROP TABLE IF EXISTS uw_users;
+CREATE TABLE uw_users (
+    username    varchar(24) NOT NULL,
+    beg_time    datetime NOT NULL,
+    end_time    datetime NOT NULL,
+    running     tinyint(1),
+    method      varchar(3),
+    vpn_ip      varchar(16),
+    PRIMARY KEY (beg_time, username, vpn_ip),
+    KEY (vpn_ip, username)
+);
 
