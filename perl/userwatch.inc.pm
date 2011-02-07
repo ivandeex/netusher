@@ -18,7 +18,6 @@ use Net::SSLeay::Handle;
 use Sys::Syslog;
 
 our $CFG_ROOT = '/etc/userwatch';
-our $blocking_ssl = 0;
 
 ##############################################
 # Configuration file
@@ -183,20 +182,12 @@ sub ssl_check_die ($) {
 sub ssl_sock_opts ($$) {
     my ($conn, $noblock) = @_;
 
-    if (!$blocking_ssl) {
-        # Set FD_CLOEXEC.
-        $_ = fcntl($conn, F_GETFD, 0)
-            or fail("fcntl: $!");
-        fcntl($conn, F_SETFD, $_ | FD_CLOEXEC)
-            or fail("fnctl: $!");
-    }
-
     if (1) {
         # No buffering
         $_ = select($conn); $| = 1; select $_;
     }
 
-    if ($noblock && !$blocking_ssl) {
+    if ($noblock) {
         # Set O_NONBLOCK.
         $_ = fcntl($conn, F_GETFL, 0)
             or fail("fcntl F_GETFL: $!");  # 0 for error, 0e0 for 0.
@@ -499,14 +490,6 @@ sub ssl_write ($$$) {
 sub ssl_read_packet ($$) {
     my ($ssl, $conn) = @_;
 
-    if ($blocking_ssl) {
-        my $pkt = Net::SSLeay::ssl_read_until($ssl, "\n");
-        return unless $pkt =~ /^\d{4}:/;
-        $pkt = substr($pkt, 5, length($pkt) - 6);
-        debug("received: [$pkt]");
-        return $pkt;
-    }
-
     my $hdr = ssl_read($ssl, $conn, 5);
     if ($hdr =~ /^(\d{4}):$/) {
         my $bytes = $1 - 5;
@@ -531,11 +514,7 @@ sub ssl_write_packet ($$$) {
     fail("packet too long") if length($pkt) >= 8192;
     my $hdr = sprintf('%04d:', length($pkt) + 6);
     debug("send packet:[${hdr}${pkt}]");
-    if ($blocking_ssl) {
-        Net::SSLeay::ssl_write_all($ssl, $hdr . $pkt . "\n");
-    } else {
-        ssl_write($ssl, $conn, $hdr . $pkt . "\n");
-    }
+    ssl_write($ssl, $conn, $hdr . $pkt . "\n");
 }
 
 ##############################################
