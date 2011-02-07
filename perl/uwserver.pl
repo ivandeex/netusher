@@ -9,13 +9,14 @@ use FindBin qw($Bin);
 require "$Bin/userwatch.inc.pm";
 
 #
-# require: perl-DBD-mysql, perl-LDAP
+# require: perl-DBD-mysql, perl-LDAP, perl-EV
 #
 use DBI;
 use Net::LDAP;
+use EV;
 
 our ($CFG_ROOT, %uw_config);
-our ($ssl_ctx, $srv_sock, $ssl, $conn);
+our ($loop, %watch, $ssl_ctx, $srv_sock, $ssl, $conn);
 our ($dbh, %sth_cache);
 our ($ldap, %uid_cache, $vpn_regex);
 
@@ -430,38 +431,50 @@ sub main () {
     mysql_connect();
     ssl_startup();
 
+    $loop = EV::default_loop();
+    $watch{'int'} = $loop->signal('INT', sub { signaled('INT') });
+    $watch{'term'} = $loop->signal('TERM', sub { signaled('TERM') });
+    $watch{'quit'} = $loop->signal('QUIT', sub { signaled('QUIT') });
+
     $ssl_ctx = ssl_create_context($uw_config{server_pem}, $uw_config{ca_cert});
     $srv_sock = ssl_listen($uw_config{port});
-    while ($srv_sock) {
-        debug("waiting for client...");
-        ($ssl, $conn) = ssl_accept($srv_sock, $ssl_ctx);
-        next unless defined $ssl;
-        debug("got someone!");
+    $watch{'listen'} = $loop->io($srv_sock, &EV::READ, sub { new_client() });
+    debug("waiting for client...");
+    $loop->loop();
+    exit(0);
+}
 
-        my $ok = 0;
-        my $str = ssl_read_packet($ssl, $conn);
-        if (defined $str) {
-            my $req = parse_req($str);
-            if (ref($req) eq 'HASH') {
-                debug("request ok");
-                my $ret = handle_req($req);
-                ssl_write_packet($ssl, $conn, $ret);
-            } else {
-                info("invalid request (error:$req)");
-                ssl_write_packet($ssl, $conn, "invalid request");
-            }
+sub new_client () {
+    ($ssl, $conn) = ssl_accept($srv_sock, $ssl_ctx);
+    next unless defined $ssl;
+    debug("got someone!");
+
+    my $ok = 0;
+    my $str = ssl_read_packet($ssl, $conn);
+    if (defined $str) {
+        my $req = parse_req($str);
+        if (ref($req) eq 'HASH') {
+            debug("request ok");
+            my $ret = handle_req($req);
+            ssl_write_packet($ssl, $conn, $ret);
+        } else {
+            info("invalid request (error:$req)");
+            ssl_write_packet($ssl, $conn, "invalid request");
         }
-
-        ssl_detach($ssl, $conn);
-        undef $ssl;
-        undef $conn;
     }
+
+    ssl_detach($ssl, $conn);
+    undef $ssl;
+    undef $conn;
+}
+
+sub signaled ($) {
+    my ($signal) = @_;
+    debug("catch $signal");
+    $loop->unloop();
 }
 
 sub cleanup () {
-    return if $cleanup_done;
-    $cleanup_done = 1;
-
     ssl_detach($ssl, $conn);
     ssl_detach(undef, $srv_sock);
     undef $ssl;
@@ -477,10 +490,9 @@ sub cleanup () {
     $ldap->unbind() if defined $ldap;
     undef $ldap;
 
-    info("bye");
+    info("uwserver finished");
 }
 
-$SIG{INT} = $SIG{TERM} = $SIG{QUIT} = \&cleanup;
 END { cleanup(); }
 main();
 
