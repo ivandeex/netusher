@@ -15,7 +15,7 @@ use DBI;
 use Net::LDAP;
 use EV;
 
-our ($CFG_ROOT, %uw_config, $ev_loop, %ev_watch);
+our ($config_file, %uw_config, $ev_loop, %ev_watch);
 my  (%chans);
 my  ($dbh, %sth_cache);
 my  ($ldap, %uid_cache, $vpn_regex);
@@ -401,13 +401,12 @@ sub login_weight ($) {
 # main code
 #
 sub main () {
-    my $config = "$CFG_ROOT/uwserver.conf";
-    read_config($config, [ qw(
+    read_config($config_file, [ qw(
                     vpn_net mysql_host mysql_db mysql_user mysql_pass
                     ldap_uri ldap_bind_dn ldap_bind_pass ldap_user_base
                 )],
                 [ qw(
-                    port ca_cert server_pem mysql_port
+                    port ca_cert peer_pem mysql_port
                     ldap_attr_user ldap_attr_uid ldap_start_tls
                     user_retention purge_interval also_local
                     cache_retention idle_timeout timeout
@@ -429,7 +428,7 @@ sub main () {
     mysql_connect();
 
     ssl_startup();
-    ssl_create_context($uw_config{server_pem}, $uw_config{ca_cert});
+    ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
     ev_create_loop();
 
     my $s_chan = ssl_listen($uw_config{port});

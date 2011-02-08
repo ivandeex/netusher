@@ -16,7 +16,7 @@ require "$Bin/userwatch.inc.pm";
 #
 use User::Utmp qw(:constants :utmpx);
 
-our ($CFG_ROOT, %uw_config, $ev_loop, %ev_watch);
+our ($config_file, %uw_config, $ev_loop, %ev_watch);
 my  (%chans, $srv_chan, @jobs, $finished);
 my  (%local_users, $passwd_modified_stamp);
 
@@ -178,21 +178,20 @@ sub user_logout ($$) {
 #
 
 sub main () {
-    my $config = "$CFG_ROOT/uwclient.conf";
-    read_config($config, [ qw(
+    read_config($config_file, [ qw(
                     server
                 )],
                 [ qw(
-                    port ca_cert client_pem update_interval also_local
+                    port ca_cert peer_pem update_interval also_local
                     connect_interval idle_timeout timeout
                     syslog stdout debug
                 )]);
-    fail("$config: server host undefined")
+    fail("$config_file: server host undefined")
         unless $uw_config{server};
     log_init();
 
     ssl_startup();
-    ssl_create_context($uw_config{client_pem}, $uw_config{ca_cert});
+    ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
     ev_create_loop();
 
     reconnect(1);

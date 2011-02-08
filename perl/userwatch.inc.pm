@@ -24,12 +24,18 @@ our ($ev_loop, %ev_watch, $ssl_ctx);
 # Configuration file
 #
 
-our $CFG_ROOT = '/etc/userwatch';
+our $progname = $0;
+$progname =~ s!.*/!!g;
+$progname =~ s!\..*$!!g;
+
+our $config_root = '/etc/userwatch';
+our $config_file = "$config_root/$progname.conf";
 
 our %uw_config = (
         # common parameters
         port            => 7501,
-        ca_cert         => "$CFG_ROOT/ca.crt",
+        peer_pem        => "$config_root/$progname.pem",
+        ca_cert         => "$config_root/ca.crt",
         debug           => 0,
         syslog          => 1,
         stdout          => 0,
@@ -37,12 +43,10 @@ our %uw_config = (
         idle_timeout    => 240,
         # client parameters
         server          => undef,
-        client_pem      => "$CFG_ROOT/uwclient.pem",
         also_local      => 0,
         update_interval => 120,
         connect_interval => 5,
         # server parameters
-        server_pem      => "$CFG_ROOT/uwserver.pem",
         mysql_host      => "localhost",
         mysql_port      => 3306,
         mysql_db        => undef,
@@ -73,6 +77,7 @@ sub read_config ($$$) {
         next if /^\s*$/ || /^\s*#/;
         if (/^\s*(\w+)\s*=\s*(\S+)\s*$/) {
             my ($param, $value) = ($1, $2);
+            $value = "" if $value eq '""' || $value eq "''";
             fail("$config: unknown parameter \"$param\"")
                 if !exists($uw_config{$param}) || !exists($h_allowed{$param});
             if ($uw_config{$param} !~ /^\d+$/ || $value =~ /^\d+$/) {
@@ -125,7 +130,6 @@ sub debug ($@) {
     syslog("info", $msg) if $uw_config{syslog};
     print($msg."\n") if $uw_config{stdout};    
 }
-
 
 ##############################################
 # Event loop
@@ -248,7 +252,7 @@ sub ssl_create_context ($$) {
 
     if ($pem_path) {
         # Server and client can use PEM (cert+key) for secure connection
-        $pem_path = "$CFG_ROOT/$pem_path"
+        $pem_path = "$config_root/$pem_path"
             unless $pem_path =~ m'^/';
         fail("$pem_path: pem certificate not found")
             unless -r $pem_path;
@@ -264,11 +268,12 @@ sub ssl_create_context ($$) {
         Net::SSLeay::CTX_use_certificate_file($ssl_ctx, $pem_path,
                                                 Net::SSLeay::FILETYPE_PEM());
         ssl_check_die("SSL CTX_use_certificate_file");
+        debug("enable ssl pem: $pem_path");
     }
 
     if ($ca_path) {
         # Server and client can use CA certificate to check other side
-        $ca_path = "$CFG_ROOT/$ca_path"
+        $ca_path = "$config_root/$ca_path"
             unless $ca_path =~ m'^/';
         fail("$ca_path: ca certificate not found")
             unless -r $ca_path;
@@ -277,7 +282,7 @@ sub ssl_create_context ($$) {
 
         Net::SSLeay::CTX_load_verify_locations($ssl_ctx, $ca_file, $ca_dir);
         ssl_check_die("SSL CTX_load_verify_locations");
-        debug("enable verification file:$ca_file dir:$ca_dir");
+        debug("enable ca check file:$ca_file dir:$ca_dir");
 
         my $mode = &Net::SSLeay::VERIFY_PEER
                     | &Net::SSLeay::VERIFY_FAIL_IF_NO_PEER_CERT
