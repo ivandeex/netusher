@@ -15,12 +15,10 @@ use DBI;
 use Net::LDAP;
 use EV;
 
-our ($CFG_ROOT, %uw_config);
-our ($loop, %watch, $ssl_ctx, $srv_sock, $ssl, $conn);
-our ($dbh, %sth_cache);
-our ($ldap, %uid_cache, $vpn_regex);
-
-my ($cleanup_done);
+our ($CFG_ROOT, %uw_config, $ev_loop, %ev_watch);
+my  (%chans);
+my  ($dbh, %sth_cache);
+my  ($ldap, %uid_cache, $vpn_regex);
 
 #
 # Currently only one "main" user per host is allowed.
@@ -414,7 +412,6 @@ sub main () {
                     cache_retention also_local
                     syslog stdout debug timeout
                 )]);
-
     log_init();
 
     # create regular expression for vpn network
@@ -429,65 +426,69 @@ sub main () {
     my $msg = ldap_init();
     info("warning: ldap init failed: $msg") if $msg;
     mysql_connect();
+
     ssl_startup();
+    ssl_create_context($uw_config{server_pem}, $uw_config{ca_cert});
+    ev_create_loop();
 
-    $loop = EV::default_loop();
-    $watch{'int'} = $loop->signal('INT', sub { signaled('INT') });
-    $watch{'term'} = $loop->signal('TERM', sub { signaled('TERM') });
-    $watch{'quit'} = $loop->signal('QUIT', sub { signaled('QUIT') });
+    my $s_chan = ssl_listen($uw_config{port});
+    $chans{$s_chan} = $s_chan;
+    $ev_watch{s_accept} = $ev_loop->io($s_chan->{conn}, &EV::READ,
+                                        sub { accept_pending($s_chan) });
 
-    $ssl_ctx = ssl_create_context($uw_config{server_pem}, $uw_config{ca_cert});
-    $srv_sock = ssl_listen($uw_config{port});
-    $watch{'listen'} = $loop->io($srv_sock, &EV::READ, sub { new_client() });
     debug("waiting for client...");
-    $loop->loop();
+    $ev_loop->loop();
     exit(0);
 }
 
-sub new_client () {
-    ($ssl, $conn) = ssl_accept($srv_sock, $ssl_ctx);
-    next unless defined $ssl;
-    debug("got someone!");
-
-    my $ok = 0;
-    my $str = ssl_read_packet();
-    if (defined $str) {
-        my $req = parse_req($str);
-        if (ref($req) eq 'HASH') {
-            debug("request ok");
-            my $ret = handle_req($req);
-            ssl_write_packet($ret);
-        } else {
-            info("invalid request (error:$req)");
-            ssl_write_packet("invalid request");
-        }
-    }
-
-    ssl_detach($ssl, $conn);
-    undef $ssl;
-    undef $conn;
+sub accept_pending ($) {
+    my ($s_chan) = @_;
+    my $c_chan = ssl_accept($s_chan);
+    next unless $c_chan;
+    $chans{$c_chan} = $c_chan;
+    debug('client accepted: %s', $c_chan->{addr});
+    ssl_read_packet($c_chan, \&reading_done, undef);
 }
 
-sub signaled ($) {
-    my ($signal) = @_;
-    debug("catch $signal");
-    $loop->unloop();
+sub reading_done ($$$) {
+    my ($c_chan, $pkt, $param) = @_;
+
+    unless (defined $pkt) {
+        debug('client disconnected: %s', $c_chan->{addr});
+        ssl_disconnect($c_chan);
+        delete $chans{$c_chan};
+        return;
+    }
+
+    my $req = parse_req($pkt);
+    my $ret;
+    if (ref($req) eq 'HASH') {
+        debug("request ok");
+        $ret = handle_req($req);
+    } else {
+        info("invalid request (error:$req)");
+        $ret = "invalid request";
+    }
+
+    ssl_write_packet($c_chan, $ret, \&writing_done, undef);
+}
+
+sub writing_done ($$$) {
+    my ($c_chan, $success, $param) = @_;
+    ssl_disconnect($c_chan);
+    delete $chans{$c_chan};
 }
 
 sub cleanup () {
-    ssl_detach($ssl, $conn);
-    ssl_detach(undef, $srv_sock);
-    undef $ssl;
-    undef $conn;
-    undef $srv_sock;
+    ssl_disconnect($_) for (values %chans);
+    %chans = ();
 
-    ssl_free_context($ssl_ctx);
-    undef $ssl_ctx;
+    ssl_destroy_context();
 
-    $dbh->disconnect() if defined $dbh;
+    eval { $dbh->disconnect } if defined $dbh;
     undef $dbh;
 
-    $ldap->unbind() if defined $ldap;
+    eval { $ldap->unbind } if defined $ldap;
     undef $ldap;
 
     info("uwserver finished");

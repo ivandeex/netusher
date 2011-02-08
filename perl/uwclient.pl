@@ -16,9 +16,9 @@ require "$Bin/userwatch.inc.pm";
 #
 use User::Utmp qw(:constants :utmpx);
 
-our ($CFG_ROOT, %uw_config);
-our ($ssl_ctx, $ssl, $conn);
-our (%local_users, $passwd_modified_stamp);
+our ($CFG_ROOT, %uw_config, $ev_loop, %ev_watch);
+my  (%chans, $srv_chan, @jobs);
+my  (%local_users, $passwd_modified_stamp);
 
 #
 # scan interfaces
@@ -142,12 +142,12 @@ sub create_request ($$;$) {
 }
 
 #
-# wrappers
+# typical operations
 #
+
 sub cron_job () {
     my $req = create_request("C", 1);
-    ssl_write_packet($req);
-    return ssl_read_packet();
+    queue_job($req, undef);
 }
 
 sub user_login ($$$;$) {
@@ -160,8 +160,7 @@ sub user_login ($$$;$) {
     my $req = create_request("I", 0, {
                 method => $method, user => $user, pass => $pass, uid => $uid
                 });
-    ssl_write_packet($req);
-    return ssl_read_packet();
+    queue_job($req, undef);
 }
 
 sub user_logout ($$) {
@@ -169,9 +168,12 @@ sub user_logout ($$) {
     my $req = create_request("O", 0, {
                 method => $method, user => $user, uid => 0
                 });
-    ssl_write_packet($req);
-    return ssl_read_packet();
+    queue_job($req, undef);
 }
+
+#
+# main loop
+#
 
 sub main () {
     my $config = "$CFG_ROOT/uwclient.conf";
@@ -182,36 +184,150 @@ sub main () {
                     port ca_cert client_pem also_local
                     syslog stdout debug timeout
                 )]);
-    fail("$config: server host undefined") unless $uw_config{server};
+    fail("$config: server host undefined")
+        unless $uw_config{server};
     log_init();
+
     ssl_startup();
-    $ssl_ctx = ssl_create_context($uw_config{client_pem}, $uw_config{ca_cert});
-    ($ssl, $conn) = ssl_connect($uw_config{server}, $uw_config{port}, $ssl_ctx);
-    unless (defined $ssl) {
-        info("cannot connect to server");
+    ssl_create_context($uw_config{client_pem}, $uw_config{ca_cert});
+    ev_create_loop();
+
+    reconnect();
+    debug("waiting for server...");
+
+    cron_job();
+
+    $ev_loop->loop();
+    exit(0);
+}
+
+#
+# job queue
+#
+
+sub queue_job ($$) {
+    my ($req, $waiter) = @_;
+    push @jobs, { req => $req, waiter => $waiter };
+    handle_next_job();
+}
+
+sub handle_next_job () {
+    unless (@jobs) {
+        debug("no more jobs. stopping.");
+        $ev_loop->unloop();
         return;
     }
-    debug("connected");
-    cron_job();
+    unless ($srv_chan) {
+        debug("handle next job: no connection");
+        return;
+    }
+
+    my $job = shift @jobs;
+    debug("sending job %s", $job->{req});
+    ssl_write_packet($srv_chan, $job->{req}, \&srv_writing_done, $job);
 }
 
-my $cleanup_done;
+#
+# reconnections
+#
+
+sub reconnect () {
+    # close previous server connection, if any
+    if ($srv_chan) {
+        debug("disconnect previous server connection");
+        delete $chans{$srv_chan};
+        ssl_disconnect($srv_chan);
+        undef $srv_chan;
+    }
+
+    # initiate new connection to server
+    delete $ev_watch{try_con};
+    delete $ev_watch{wait_con};
+    $ev_watch{try_con} = $ev_loop->timer(0, 2, sub { connect_attempt() });
+    debug("reconnection started...");
+}
+
+sub connect_attempt () {
+    debug("try to connect...");
+    my $chan = ssl_connecting($uw_config{server}, $uw_config{port});
+    return unless $chan;
+
+    delete $ev_watch{try_con};
+    delete $ev_watch{wait_con};
+
+    if ($chan->{pending}) {
+        #debug("connection is pending, wating on socket");
+        $chans{$chan} = $chan;
+        $ev_watch{wait_con} = $ev_loop->io($chan->{conn},
+                                        &EV::READ | &EV::WRITE,
+                                        sub { connect_pending($chan) });
+        return;
+    }
+
+    # connection established
+    debug("successfully connected to server (at once)");
+    $chans{$chan} = $chan;
+    $srv_chan = $chan;
+    handle_next_job();
+}
+
+sub connect_pending ($) {
+    my ($chan) = @_;
+    my $code = ssl_connected($chan);
+    if ($code eq "pending") {
+        debug("connection still pending...");
+        return;
+    }
+
+    if ($code ne "ok") {
+        debug("connection aborted");
+        $srv_chan = $chan;
+        reconnect();
+        return;
+    }
+
+    delete $ev_watch{wait_con};
+    $srv_chan = $chan;
+    debug("successfully connected to server (after wait)");
+
+    handle_next_job();
+}
+
+#
+# reading and writing
+#
+
+sub srv_writing_done ($$$) {
+    my ($chan, $success, $job) = @_;
+
+    unless ($success) {
+        unshift @jobs, $job;
+        reconnect();
+        return;
+    }
+
+    ssl_read_packet($srv_chan, \&srv_reading_done, $job);
+}
+
+sub srv_reading_done ($$$) {
+    my ($chan, $reply, $job) = @_;
+    debug("received reply %s", $job->{req});
+    handle_next_job();
+}
+
+#
+# cleanup
+#
 
 sub cleanup () {
-    return if $cleanup_done;
-    $cleanup_done = 1;
+    ssl_disconnect($_) for (values %chans);
+    %chans = ();
 
-    ssl_detach($ssl, $conn);
-    undef $ssl;
-    undef $conn;
+    ssl_destroy_context();
 
-    ssl_free_context($ssl_ctx);
-    undef $ssl_ctx;
-
-    info("bye");
+    info("uwclient finished");
 }
 
-$SIG{INT} = $SIG{TERM} = $SIG{QUIT} = \&cleanup;
 END { cleanup(); }
 main();
 

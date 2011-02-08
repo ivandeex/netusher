@@ -16,14 +16,15 @@ use Socket;
 use Net::SSLeay ();
 use Net::SSLeay::Handle;
 use Sys::Syslog;
+use EV;
 
-our (%loop, $ssl, $conn);
-
-our $CFG_ROOT = '/etc/userwatch';
+our ($ev_loop, %ev_watch, $ssl_ctx);
 
 ##############################################
 # Configuration file
 #
+
+our $CFG_ROOT = '/etc/userwatch';
 
 our %uw_config = (
         # common parameters
@@ -120,6 +121,24 @@ sub debug ($@) {
     print($msg."\n") if $uw_config{stdout};    
 }
 
+
+##############################################
+# Event loop
+#
+
+sub ev_create_loop () {
+    $ev_loop = EV::default_loop();
+    $ev_watch{s_int} = $ev_loop->signal('INT', sub { ev_signaled('INT') });
+    $ev_watch{s_term} = $ev_loop->signal('TERM', sub { ev_signaled('TERM') });
+    $ev_watch{s_quit} = $ev_loop->signal('QUIT', sub { ev_signaled('QUIT') });
+}
+
+sub ev_signaled ($) {
+    my ($signal) = @_;
+    debug("catch $signal");
+    $ev_loop->unloop();
+}
+
 ##############################################
 # Safe wrappers around Net::SSLeay
 #
@@ -174,26 +193,31 @@ sub ssl_get_error () {
     return $errors;
 }
 
-sub ssl_check_die ($) {
-    my ($message) = @_;
+sub ssl_check_die ($;$) {
+    my ($message, $non_fatal) = @_;
     my ($errors, $errnos) = ssl_get_error();
-    fail("${message}: ${errors}") if @$errnos;
-    return;
+    return 0 unless @$errnos;
+    if (!$non_fatal) {
+       fail("${message}: ${errors}");
+    }
+    info("${message}: ${errors}");
+    return -1;
 }
 
-sub ssl_sock_opts ($$) {
-    my ($conn, $noblock) = @_;
+sub ssl_sock_opts ($;$) {
+    my ($conn, $blocking) = @_;
 
-    if (1) {
-        # No buffering
-        $_ = select($conn); $| = 1; select $_;
-    }
+    # No buffering
+    my $f = select($conn); $| = 1; select $f;
 
-    if ($noblock) {
-        # Set O_NONBLOCK.
-        $_ = fcntl($conn, F_GETFL, 0)
-            or fail("fcntl F_GETFL: $!");  # 0 for error, 0e0 for 0.
-        fcntl($conn, F_SETFL, $_ | O_NONBLOCK)
+    # Set O_NONBLOCK.
+    my $v = fcntl($conn, F_GETFL, 0)
+        or fail("fcntl F_GETFL: $!");  # 0 for error, 0e0 for 0.
+    if ($blocking) {
+        fcntl($conn, F_SETFL, $v & ~O_NONBLOCK)
+            or fail("fcntl F_SETFL O_NONBLOCK: $!");  # 0 for error, 0e0 for 0.
+    } else {
+        fcntl($conn, F_SETFL, $v | O_NONBLOCK)
             or fail("fcntl F_SETFL O_NONBLOCK: $!");  # 0 for error, 0e0 for 0.
     }
 }
@@ -203,14 +227,14 @@ sub ssl_sock_opts ($$) {
 # could apply to multiple listening sockets, or each listening socket could
 # have its own CTX. Each CTX may represent only one local certificate.
 #
-sub ssl_create_context (;$$) {
-    my ($pem_path, $ca_crt_path) = @_;
+sub ssl_create_context ($$) {
+    my ($pem_path, $ca_path) = @_;
 
-    my $ctx = Net::SSLeay::CTX_new();
+    $ssl_ctx = Net::SSLeay::CTX_new();
     ssl_check_die("SSL CTX_new");
 
     # OP_ALL enables all harmless work-arounds for buggy clients.
-    Net::SSLeay::CTX_set_options($ctx, Net::SSLeay::OP_ALL());
+    Net::SSLeay::CTX_set_options($ssl_ctx, Net::SSLeay::OP_ALL());
     ssl_check_die("SSL CTX_set_options");
 
     # Modes:
@@ -219,7 +243,7 @@ sub ssl_create_context (;$$) {
     # 0x4: SSL_MODE_AUTO_RETRY
     # 0x8: SSL_MODE_NO_AUTO_CHAIN
     # 0x10: SSL_MODE_RELEASE_BUFFERS (ignored before OpenSSL v1.0.0)
-    Net::SSLeay::CTX_set_mode($ctx, 0x11);
+    Net::SSLeay::CTX_set_mode($ssl_ctx, 0x11);
     ssl_check_die("SSL CTX_set_mode");
 
     if ($pem_path) {
@@ -230,56 +254,55 @@ sub ssl_create_context (;$$) {
             unless -r $pem_path;
 
         # Load certificate. Avoid password prompt.
-        Net::SSLeay::CTX_set_default_passwd_cb($ctx, sub { "" });
+        Net::SSLeay::CTX_set_default_passwd_cb($ssl_ctx, sub { "" });
         ssl_check_die("SSL CTX_set_default_passwd_cb");
 
-        Net::SSLeay::CTX_use_RSAPrivateKey_file($ctx, $pem_path, Net::SSLeay::FILETYPE_PEM());
+        Net::SSLeay::CTX_use_RSAPrivateKey_file($ssl_ctx, $pem_path,
+                                                Net::SSLeay::FILETYPE_PEM());
         ssl_check_die("SSL CTX_use_RSAPrivateKey_file");
 
-        Net::SSLeay::CTX_use_certificate_file($ctx, $pem_path, Net::SSLeay::FILETYPE_PEM());
+        Net::SSLeay::CTX_use_certificate_file($ssl_ctx, $pem_path,
+                                                Net::SSLeay::FILETYPE_PEM());
         ssl_check_die("SSL CTX_use_certificate_file");
     }
 
-    if ($ca_crt_path) {
+    if ($ca_path) {
         # Server and client can use CA certificate to check other side
-        $ca_crt_path = "$CFG_ROOT/$ca_crt_path"
-            unless $ca_crt_path =~ m'^/';
-        fail("$ca_crt_path: ca certificate not found")
-            unless -r $ca_crt_path;
-        my ($ca_file, $ca_dir) = (-d $ca_crt_path) ?
-                                    (undef, $ca_crt_path) : ($ca_crt_path, undef);
+        $ca_path = "$CFG_ROOT/$ca_path"
+            unless $ca_path =~ m'^/';
+        fail("$ca_path: ca certificate not found")
+            unless -r $ca_path;
+        my ($ca_file, $ca_dir) = (-d $ca_path) ?
+                                    (undef, $ca_path) : ($ca_path, undef);
 
-        Net::SSLeay::CTX_load_verify_locations($ctx, $ca_file, $ca_dir);
+        Net::SSLeay::CTX_load_verify_locations($ssl_ctx, $ca_file, $ca_dir);
         ssl_check_die("SSL CTX_load_verify_locations");
         debug("enable verification file:$ca_file dir:$ca_dir");
 
         my $mode = &Net::SSLeay::VERIFY_PEER
                     | &Net::SSLeay::VERIFY_FAIL_IF_NO_PEER_CERT
                     | &Net::SSLeay::VERIFY_CLIENT_ONCE;
-        Net::SSLeay::CTX_set_verify($ctx, $mode, \&ssl_cert_verify_cb);
+        Net::SSLeay::CTX_set_verify($ssl_ctx, $mode, \&_ssl_cert_verify_cb);
         ssl_check_die("SSL CTX_set_verify");
     }
-
-    return $ctx;
 }
 
-sub ssl_cert_verify_cb {
+sub _ssl_cert_verify_cb {
     my ($ok, $x509_store_ctx) = @_;
     if ($uw_config{debug}) {
         my $cert = Net::SSLeay::X509_STORE_CTX_get_current_cert($x509_store_ctx);
-        my $subj = Net::SSLeay::X509_NAME_oneline(Net::SSLeay::X509_get_subject_name($cert));
+        my $subj = Net::SSLeay::X509_get_subject_name($cert);
+        $subj = Net::SSLeay::X509_NAME_oneline($subj);
         my $cname = ($subj =~ m'/CN=([^/]+)/') ? $1 : $subj;
         debug("verification ok:$ok cname:$cname");
     }
     return $ok;
 }
 
-sub ssl_free_context ($) {
-    my ($ctx) = @_;
-    if (defined $ctx) {
-        Net::SSLeay::CTX_free($ctx);
-        ssl_check_die("SSL CTX_free");
-    }
+sub ssl_destroy_context () {
+    Net::SSLeay::CTX_free($ssl_ctx) if $ssl_ctx;
+    ssl_check_die("SSL CTX_free");
+    undef $ssl_ctx;
 }
 
 #
@@ -287,7 +310,7 @@ sub ssl_free_context ($) {
 # which is associated with the shared CTX.
 #
 sub ssl_create_ssl ($$) {
-    my ($ctx, $conn) = @_;
+    my ($conn, $ctx) = @_;
 
     my $ssl = Net::SSLeay::new($ctx);
     ssl_check_die("SSL new");
@@ -301,8 +324,8 @@ sub ssl_create_ssl ($$) {
 #
 # Listen for client connections
 #
-sub ssl_listen ($) {
-    my ($port) = @_;
+sub ssl_listen ($;$) {
+    my ($port, $blocking) = @_;
 
     my $sock;
     socket($sock, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
@@ -314,90 +337,128 @@ sub ssl_listen ($) {
     listen($sock, SOMAXCONN)
         or fail("listen ${port}: $!");
 
-    ssl_sock_opts($sock, 1);
+    ssl_sock_opts($sock, $blocking);
 
-    return $sock;
+    my $chan = {
+        type => 'accepting',
+        pending => 1,
+        ssl => undef,
+        conn => $sock
+        };
+    return $chan;
 }
 
 #
 # Accept another client connection
 #
-sub ssl_accept ($$) {
-    my ($sock, $ctx) = @_;
+sub ssl_accept ($;$) {
+    my ($s_chan, $blocking) = @_;
 
-    my $timeout = $uw_config{timeout};
-    my $vec = "";
-    vec($vec, fileno($sock), 1) = 1;
-    my ($nfound, $timeleft) = select($vec, $vec, undef, $timeout);
-    return unless $nfound;
-
-    my $from = accept(my $conn, $sock);
-    unless ($from) {
+    my $paddr = accept(my $conn, $s_chan->{conn});
+    unless ($paddr) {
         debug("accept: $!");
         return;
     }
+    my ($port, $iaddr) = sockaddr_in($paddr);
 
-    ssl_sock_opts($conn, 1);
+    my $c_chan = {
+        type => 'accepted',
+        pending => 0,
+        conn => $conn,
+        addr => join('.', unpack('C*', $iaddr))
+        };
 
-    my $ssl = ssl_create_ssl($ctx, $conn);
-
-    Net::SSLeay::accept($ssl);
+    ssl_sock_opts($c_chan->{conn}, $blocking);
+    $c_chan->{ssl} = ssl_create_ssl($c_chan->{conn}, $ssl_ctx);
+    Net::SSLeay::accept($c_chan->{ssl});
     ssl_check_die("SSL accept");
 
-    return ($ssl, $conn);
+    return $c_chan;
 }
 
 #
-# Connect to server
+# Connecting to server
 #
-sub ssl_connect ($$$) {
-    my ($server, $port, $ctx) = @_;
+sub ssl_connecting ($$;$) {
+    my ($server, $port, $blocking) = @_;
 
-    my $sock;
-    socket($sock, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
+    my $conn;
+    socket($conn, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
         or fail("socket: $!");
 
     my $ip = gethostbyname($server)
         or fail("$server: host not found");
     my $conn_params = sockaddr_in($port, $ip);
 
-    ssl_sock_opts($sock, 1);
+    ssl_sock_opts($conn, $blocking);
 
-    connect($sock, $conn_params);
-    my $timeout = $uw_config{timeout};
-    my $vec = "";
-    vec($vec, fileno($sock), 1) = 1;
-    my ($nfound, $timeleft) = select($vec, $vec, undef, $timeout);
-    if (!connect($sock, $conn_params)) {
-        info("$server: cannot connect: $!");
-        return;
+    my $ret = connect($conn, $conn_params);
+
+    if ($ret) {
+        debug("connect: success");
+    } else {
+        unless ($!{EINPROGRESS}) {
+            info("$server: connection failed: $!");
+            return;
+        }
+        debug("connection pending...");
     }
-    debug("connected to server");
 
-    ssl_sock_opts($sock, 1);
+    my $chan = {
+        type => 'connecting',
+        pending => 1,
+        ssl => undef,
+        conn => $conn,
+        server => $server,
+        port => $port,
+        conn_params => $conn_params
+        };
 
-    my $ssl = ssl_create_ssl($ctx, $sock);
+    ssl_connected($chan, 1) if $ret;
+    return $chan;
+}
 
-    Net::SSLeay::connect($ssl);
+
+sub ssl_connected ($;$) {
+    my ($chan, $already_connected) = @_;
+
+    unless ($already_connected) {
+        my $ret = connect($chan->{conn}, $chan->{conn_params});
+        unless ($ret) {
+            return "pending" if $!{EINPROGRESS};
+            info("%s: cannot connect: %s", $chan->{server}, $!);
+            return "fail";
+        }
+        debug("client connection ready");
+    }
+
+    $chan->{type} = 'connected';
+    $chan->{pending} = 0;
+
+    $chan->{ssl} = ssl_create_ssl($chan->{conn}, $ssl_ctx);
+    Net::SSLeay::connect($chan->{ssl});
     ssl_check_die("SSL connect");
 
-    return ($ssl, $sock);
+    return "ok";
 }
 
 #
 # Detach and close connection
 #
-sub ssl_detach ($$) {
-    my ($ssl, $conn) = @_;
+
+sub ssl_disconnect ($) {
+    my ($chan) = @_;
 
     # Paired with closing connection.
-    if (defined $ssl) {
-        Net::SSLeay::free($ssl);
+    if ($chan->{ssl}) {
+        Net::SSLeay::free($chan->{ssl});
         ssl_check_die("SSL free");
+        undef $chan->{ssl};
     }
-    if (defined $conn) {
-        shutdown($conn, 2);
-        close($conn);
+    if ($chan->{conn}) {
+        shutdown($chan->{conn}, 2);
+        close($chan->{conn});
+        undef $chan->{conn}
     }
 }
 
@@ -405,121 +466,160 @@ sub ssl_detach ($$) {
 # Packet reading
 #
 
-sub ssl_read ($) {
-    my ($bytes) = @_;
-
-    my $lines = "";
-    my $timeout = $uw_config{timeout};
-    #print "read returned: ";
-
-    while ($bytes > 0) {
-        my $vec = "";
-        vec($vec, fileno($conn), 1) = 1;
-        my ($nfound, $timeleft) = select($vec, $vec, undef, $timeout);
-        $timeout = $timeleft if $timeleft;
-        #print "{$nfound/$timeleft} ";
-
-        # Repeat read() until EAGAIN before select()ing for more. SSL may already be
-        # holding the last packet in its buffer, so if we aren't careful to decode
-        # everything that's pending we could block forever at select(). This would be
-        # after SSL already read "\r\n\r\n" but before it decoded and returned it. As
-        # documented, OpenSSL returns data from only one SSL record per call, but its
-        # internal system call to read may gather more than one record. In short, a
-        # socket may not become readable again after reading, but note that writing
-        # doesn't have this problem since a socket will always become writable again
-        # after writing.
-
-        while ($bytes > 0) {
-            # 16384 is the maximum amount read() can return; larger values allocate memory
-            # that can't be unused as part of the buffer passed to read().
-            my $read_buf = Net::SSLeay::read($ssl, $bytes);
-            ssl_check_die("SSL read");
-            if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
-                #print "[again], ";
-                #print "!";
-                next;                
-            }
-            fail("read failed: $!")
-                unless defined $read_buf;
-            if (defined $read_buf) {
-                my $len = length($read_buf);
-                if ($len == 0) {
-                    debug("connection terminated");
-                    return;
-                }
-                $lines .= $read_buf;
-                $bytes -= $len;
-            }
-        }
-    }
-
-    #print "\n";
-    return $lines;
+sub ssl_read_packet () {
+    my ($chan, $handler, $param) = @_;
+    $chan->{r_handler} = $handler;
+    $chan->{r_param} = $param;
+    $chan->{r_head} = "";
+    $chan->{r_body} = "";
+    $chan->{r_what} = "r_head";
+    $chan->{r_bytes} = 5;
+    $chan->{r_first} = 1;
+    $chan->{r_watch} = $ev_loop->io($chan->{conn}, &EV::READ,
+                                    sub { _ssl_read_pending($chan) });
+    #debug('wait for data from %s: watch:%s', $chan->{addr}, $chan->{r_watch});
 }
 
-sub ssl_read_packet () {
-    my $hdr = ssl_read(5);
-    if ($hdr =~ /^(\d{4}):$/) {
-        my $bytes = $1 - 5;
+sub _ssl_read_pending ($) {
+    my ($chan) = @_;
+    #debug("reading triggered");
+
+    #
+    # reset wait mode to read/write after first byte.
+    # ssl might need re-negotiation etc
+    #
+    if ($chan->{r_first}) {
+        debug('switching to read/write: watch:%s', $chan->{r_watch});
+        $chan->{r_watch}->events(&EV::READ | &EV::WRITE);
+        $chan->{r_first} = 0;
+    }
+
+    #
+    # 16384 is the maximum amount read() can return.
+    # Larger values allocate memory that can't be unused
+    # as part of the buffer passed to read().
+    #
+    my $bytes = $chan->{r_bytes};
+    $bytes = 16384 if $bytes > 16384;
+
+    #
+    # Repeat read() until EAGAIN before select()ing for more. SSL may already be
+    # holding the last packet in its buffer, so if we aren't careful to decode
+    # everything that's pending we could block forever at select(). This would be
+    # after SSL already read "\r\n\r\n" but before it decoded and returned it. As
+    # documented, OpenSSL returns data from only one SSL record per call, but its
+    # internal system call to read may gather more than one record. In short, a
+    # socket may not become readable again after reading, but note that writing
+    # doesn't have this problem since a socket will always become writable again
+    # after writing.
+    #
+    my $buf = Net::SSLeay::read($chan->{ssl}, $bytes);
+    ssl_check_die("SSL read", "non-fatal");
+
+    if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
+        #debug("will read later: again=%s intr=%s nobufs=%s", $!{EAGAIN}, $!{EINTR}, $!{ENOBUFS});
+        return;
+    }
+
+    my $handler = $chan->{r_handler};
+    unless (defined $buf) {
+        info("read failed: $!");
+        &$handler($chan, undef, $chan->{r_param});
+        return;
+    }
+
+    $bytes = length($buf);
+    unless ($bytes) {
+        debug("connection terminated");
+        delete $chan->{r_watch};
+        &$handler($chan, undef, $chan->{r_param});
+        return;
+    }
+
+    $chan->{$chan->{r_what}} .= $buf;
+    $chan->{r_bytes} -= $bytes;
+    return if $chan->{r_bytes} > 0;
+
+    if ($chan->{r_what} eq "r_body") {
+        my $body = $chan->{r_body};
+        if ($body =~ /\n$/) {
+            chomp $body;
+            debug("received: [$body]");
+            delete $chan->{r_watch};
+            &$handler($chan, $body, $chan->{r_param});
+            return;
+        }
+        debug("bad request body [$body]");
+        delete $chan->{r_watch};
+        &$handler($chan, undef, $chan->{r_param});
+        return;
+    }
+    
+    # it's a header
+    if ($chan->{r_head} =~ /^(\d{4}):$/) {
+        $bytes = $1 - 5;
         if ($bytes > 0 && $bytes <= 8192) {
-            debug("request header: [$hdr]");
-            my $pkt = ssl_read($bytes);
-            if ($pkt =~ /\n$/) {
-                chomp $pkt;
-                debug("received: [$pkt]");
-                return $pkt;
-            }
-            debug("bad request body [$pkt]");
+            debug("request header: [%s]", $chan->{r_head});
+            $chan->{r_what} = "r_body";
+            $chan->{r_body} = "";
+            $chan->{r_bytes} = $bytes;
             return;
         }
     }
-    debug("bad request header \"$hdr\"");
+
+    debug("bad request header [%s]", $chan->{r_head});
+    delete $chan->{r_watch};
+    &$handler($chan, undef, $chan->{r_param});
     return;
 }
 
 #
-# Packet rwriting
+# Packet writing
 #
 
-sub ssl_write_packet ($) {
-    my ($pkt) = @_;
-    fail("packet too long") if length($pkt) >= 8192;
-    my $hdr = sprintf('%04d:', length($pkt) + 6);
-    debug("send packet:[${hdr}${pkt}]");
-    ssl_write($hdr . $pkt . "\n");
+sub ssl_write_packet ($$$$) {
+    my ($chan, $buf, $handler, $param) = @_;
+    my $bytes = length($buf);
+    fail("packet too long") if $bytes >= 8192;
+    $bytes += 6;
+    my $head = sprintf('%04d:', $bytes);
+    debug("send packet:[${head}${buf}]");
+
+    $chan->{w_handler} = $handler;
+    $chan->{w_param} = $param;
+    $chan->{w_buf} = $head . $buf . "\n";
+    $chan->{w_watch} = $ev_loop->io($chan->{conn}, &EV::READ | &EV::WRITE,
+                                    sub { _ssl_write_pending($chan) });
 }
 
-sub ssl_write ($) {
-    my ($write_buf) = @_;
+sub _ssl_write_pending ($) {
+    my ($chan) = @_;
 
-    my $total = length($write_buf);
-    debug("write $total bytes");
-    #print "write returned: ";
-    my $timeout = $uw_config{timeout};
+    my $total = length($chan->{w_buf});
+    #debug('writing %s bytes', $total);
+    my $bytes = Net::SSLeay::write($chan->{ssl}, $chan->{w_buf});
+    ssl_check_die("SSL write");
 
-    while ($total > 0) {
-        my $vec = "";
-        vec($vec, fileno($conn), 1) = 1;
-        my ($nfound, $timeleft) = select($vec, $vec, undef, $timeout);
-        $timeout = $timeleft if $timeleft;
-        #print "{$nfound/$timeleft} ";
-
-        my $bytes = Net::SSLeay::write($ssl, $write_buf);
-        ssl_check_die("SSL write");
-        if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
-            #print "[again], ";
-            #print "!";
-            next;
-        }
-        fail("write error: $!") unless $bytes;
-        #print $bytes > 0 ? $bytes.", " : ".";
-        if ($bytes > 0) {
-            substr($write_buf, 0, $bytes, "");
-            $total -= $bytes;
-        }
+    if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
+        #debug("will write later: again=%s intr=%s nobufs=%s", $!{EAGAIN}, $!{EINTR}, $!{ENOBUFS});
+        return;
     }
 
-    #print "\n";
+    my $handler = $chan->{w_handler};
+    unless ($bytes) {
+        info('write bytes:%s error:%s', $bytes, $!);
+        &$handler($chan, 0, $chan->{w_param});
+        return;
+    }
+    return if $bytes < 0;
+
+    substr($chan->{w_buf}, 0, $bytes, "");
+    $total -= $bytes;
+    return if $total > 0;
+
+    delete $chan->{w_watch};
+    &$handler($chan, 1, $chan->{w_param});
+    return;
 }
 
 ##############################################
