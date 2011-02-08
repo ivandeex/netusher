@@ -16,9 +16,11 @@ use Socket;
 use Net::SSLeay ();
 use Net::SSLeay::Handle;
 use Sys::Syslog;
+use POSIX;
 use EV;
 
-our ($ev_loop, %ev_watch, $ssl_ctx);
+our ($ev_loop, %ev_watch, $ssl_ctx, $in_parent);
+my  ($pid_written);
 
 ##############################################
 # Configuration file
@@ -36,7 +38,10 @@ our %uw_config = (
         port            => 7501,
         peer_pem        => "$config_root/$progname.pem",
         ca_cert         => "$config_root/ca.crt",
+        pid_file        => "/var/run/userwatch/$progname.pid",
+        daemonize       => 1,
         debug           => 0,
+        stacktrace      => 0,
         syslog          => 1,
         stdout          => 0,
         timeout         => 5,
@@ -109,18 +114,28 @@ sub log_init () {
     openlog($prog, "cons,pid", "daemon");
 }
 
+$SIG{__DIE__} = sub { fail(join("\n", @_)); };
+$SIG{__WARN__} = sub { info(join("\n", @_)); };
+
 sub fail ($@) {
     my $fmt = shift;
     my $msg = "[ fail] " . sprintf($fmt, @_);
+    chomp $msg;
     syslog("err", $msg) if $uw_config{syslog};
-    confess($msg."\n");
+    undef $SIG{__DIE__};
+    $msg = sprintf("[%5d] ", $$) . $msg;
+    if ($uw_config{stacktrace}) {
+        confess($msg);
+    } else {
+        die($msg);
+    }
 }
 
 sub info ($@) {
     my $fmt = shift;
     my $msg = "[ info] " . sprintf($fmt, @_);
     syslog("notice", $msg) if $uw_config{syslog};
-    print($msg."\n") if $uw_config{stdout};
+    printf("[%5d] %s\n", $$, $msg) if $uw_config{stdout};
 }
 
 sub debug ($@) {
@@ -128,7 +143,7 @@ sub debug ($@) {
     my $fmt = shift;
     my $msg = "[debug] " . sprintf($fmt, @_);
     syslog("info", $msg) if $uw_config{syslog};
-    print($msg."\n") if $uw_config{stdout};    
+    printf("[%5d] %s\n", $$, $msg) if $uw_config{stdout};    
 }
 
 ##############################################
@@ -146,6 +161,51 @@ sub ev_signaled ($) {
     my ($signal) = @_;
     debug("catch $signal");
     $ev_loop->unloop();
+}
+
+sub daemonize () {
+    return 0 unless $uw_config{daemonize};
+
+    my $pid_file = $uw_config{pid_file};
+    if ($pid_file) {
+        fail("$pid_file: pid file already exists") if -e $pid_file;
+        (my $pid_dir = $pid_file) =~ s!/+[^/]*$!!;
+        mkdir($pid_dir);
+        (-d $pid_dir) or fail("$pid_dir: directory does not exist");
+        (-w $pid_dir) or fail("$pid_dir: directory is not writeable");
+    }
+
+    defined(my $pid = fork())  or fail("can't fork: $!");
+    $in_parent = $pid;
+    if ($in_parent) {
+        debug("parent exits");
+        exit(0);
+    }
+
+    chdir('/')                 or fail("can't chdir to /: $!");
+    open(STDIN,  '</dev/null') or fail("can't read /dev/null: $!");
+    open(STDOUT, '>/dev/null') or fail("can't write to /dev/null: $!");
+    open(STDERR, '>/dev/null') or fail("can't write to /dev/null: $!");
+    setsid()                   or fail("can't start a new session: $!");
+    umask(022);
+    $uw_config{stdout} = 0;
+
+    $| = 1;
+    if (open(my $pf, "> $pid_file")) {
+        print $pf $$;
+        close $pf;
+    }
+    $pid_written = 1;
+
+    debug("daemonized");
+    return $$;
+}
+
+sub end_daemon () {
+    unless ($in_parent) {
+        unlink($uw_config{pid_file}) if $pid_written;
+        info("$progname finished");
+    }
 }
 
 ##############################################

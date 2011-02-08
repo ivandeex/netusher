@@ -16,7 +16,7 @@ require "$Bin/userwatch.inc.pm";
 #
 use User::Utmp qw(:constants :utmpx);
 
-our ($config_file, %uw_config, $ev_loop, %ev_watch);
+our ($config_file, $progname, %uw_config, $ev_loop, %ev_watch);
 my  (%chans, $srv_chan, @jobs, $finished);
 my  (%local_users, $passwd_modified_stamp);
 
@@ -184,7 +184,7 @@ sub main () {
                 [ qw(
                     port ca_cert peer_pem update_interval also_local
                     connect_interval idle_timeout timeout
-                    syslog stdout debug
+                    syslog stdout debug stacktrace daemonize
                 )]);
     fail("$config_file: server host undefined")
         unless $uw_config{server};
@@ -192,13 +192,18 @@ sub main () {
 
     ssl_startup();
     ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
+
     ev_create_loop();
+    if (daemonize()) {
+        # clone event loop in the child
+        $ev_loop->loop_fork();
+    }
 
     reconnect(1);
     $ev_watch{update} = $ev_loop->timer(0, $uw_config{update_interval},
                                         \&update_active_users);
 
-    debug("waiting for server...");
+    info("$progname started");
     $ev_loop->loop();
     exit(0);
 }
@@ -348,10 +353,8 @@ sub cleanup () {
     $finished = 1;
     close_channel($_) for (values %chans);
     %chans = ();
-
     ssl_destroy_context();
-
-    info("uwclient finished");
+    end_daemon();
 }
 
 END { cleanup(); }

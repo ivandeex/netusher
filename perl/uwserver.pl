@@ -15,7 +15,7 @@ use DBI;
 use Net::LDAP;
 use EV;
 
-our ($config_file, %uw_config, $ev_loop, %ev_watch);
+our ($config_file, $progname, %uw_config, $ev_loop, %ev_watch);
 my  (%chans);
 my  ($dbh, %sth_cache);
 my  ($ldap, %uid_cache, $vpn_regex);
@@ -38,6 +38,7 @@ my $min_login_weight = 5;
 # connection to ldap for browsing
 #
 sub ldap_init () {
+    ldap_close();
     my ($msg, $ldap_conn)
         = ldap_connect($uw_config{ldap_bind_dn}, undef,
                         $uw_config{ldap_bind_pass}, 0);
@@ -47,19 +48,26 @@ sub ldap_init () {
     return $msg;
 }
 
+sub ldap_close () {
+    if (defined $ldap) {
+        eval { $ldap->unbind() };
+        undef $ldap;
+    }
+}
+
 #
 # connection to ldap for browsing or to to check credentials
 #
 sub ldap_connect ($$$$) {
     my ($bind_dn, $user, $pass, $just_check) = @_;
 
-    my $ldap_conn = Net::LDAP->new($uw_config{ldap_uri},
+    my $conn = Net::LDAP->new($uw_config{ldap_uri},
                                 timeout => $uw_config{timeout},
                                 version => 3)
         or return "ldap server down";
 
     if ($uw_config{ldap_start_tls}) {
-        $ldap_conn->start_tls()
+        $conn->start_tls()
             or return "ldap tls failed";
     }
 
@@ -67,9 +75,9 @@ sub ldap_connect ($$$$) {
         $bind_dn = sprintf('%s=%s,%s', $uw_config{ldap_attr_user},
                             $user, $uw_config{ldap_user_base});
     }
-    my $res = $ldap_conn->bind($bind_dn, password => $pass);
+    my $res = $conn->bind($bind_dn, password => $pass);
 
-    $ldap_conn->unbind() if $just_check;
+    $conn->unbind() if $just_check;
 
     debug("ldap auth uri:%s tls:%s bind:%s pass:%s returns: %s",
             $uw_config{ldap_uri}, $uw_config{ldap_start_tls},
@@ -77,7 +85,7 @@ sub ldap_connect ($$$$) {
     return "invalid password" if $res->code();
 
     # success
-    return (0, $ldap_conn);
+    return (0, $conn);
 }
 
 #
@@ -267,6 +275,7 @@ sub handle_req ($) {
 # connect to mysql.
 #
 sub mysql_connect () {
+    mysql_close();
     $dbh = DBI->connect(
                 "DBI:mysql:$uw_config{mysql_db};host=$uw_config{mysql_host}",
                 $uw_config{mysql_user}, $uw_config{mysql_pass})
@@ -276,6 +285,19 @@ sub mysql_connect () {
     $dbh->{AutoCommit} = 0;
     $dbh->do("SET NAMES 'utf8'");
     %sth_cache = ();
+}
+
+sub mysql_close () {
+    if (defined $dbh) {
+        eval { $dbh->disconnect() };
+        undef $dbh;
+    }
+}
+
+sub mysql_clone () {
+    my $child_dbh = $dbh->clone();
+    mysql_close();
+    $dbh = $child_dbh;
 }
 
 sub mysql_execute ($@) {
@@ -410,7 +432,7 @@ sub main () {
                     ldap_attr_user ldap_attr_uid ldap_start_tls
                     user_retention purge_interval also_local
                     cache_retention idle_timeout timeout
-                    syslog stdout debug
+                    syslog stdout debug stacktrace daemonize
                 )]);
     log_init();
 
@@ -429,7 +451,13 @@ sub main () {
 
     ssl_startup();
     ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
+
     ev_create_loop();
+    if (daemonize()) {
+        # clone dbi-mysql and event loop in the child
+        mysql_clone();
+        $ev_loop->loop_fork();
+    }
 
     my $s_chan = ssl_listen($uw_config{port});
     $chans{$s_chan} = $s_chan;
@@ -439,7 +467,7 @@ sub main () {
     $ev_watch{purge} = $ev_loop->timer(0, $uw_config{purge_interval},
                                         \&purge_expired_users);
 
-    debug("waiting for clients...");
+    info("$progname started");
     $ev_loop->loop();
     exit(0);
 }
@@ -496,16 +524,10 @@ sub close_channel ($) {
 sub cleanup () {
     close_channel($_) for (values %chans);
     %chans = ();
-
     ssl_destroy_context();
-
-    eval { $dbh->disconnect } if defined $dbh;
-    undef $dbh;
-
-    eval { $ldap->unbind } if defined $ldap;
-    undef $ldap;
-
-    info("uwserver finished");
+    mysql_close();
+    ldap_close();
+    end_daemon();
 }
 
 END { cleanup(); }
