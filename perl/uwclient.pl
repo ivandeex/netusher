@@ -17,7 +17,7 @@ require "$Bin/userwatch.inc.pm";
 use User::Utmp qw(:constants :utmpx);
 
 our ($CFG_ROOT, %uw_config, $ev_loop, %ev_watch);
-my  (%chans, $srv_chan, @jobs);
+my  (%chans, $srv_chan, @jobs, $finished);
 my  (%local_users, $passwd_modified_stamp);
 
 #
@@ -184,7 +184,8 @@ sub main () {
                 )],
                 [ qw(
                     port ca_cert client_pem update_interval also_local
-                    connect_interval syslog stdout debug timeout
+                    connect_interval idle_timeout timeout
+                    syslog stdout debug
                 )]);
     fail("$config: server host undefined")
         unless $uw_config{server};
@@ -238,8 +239,7 @@ sub reconnect (;$) {
     # close previous server connection, if any
     if ($srv_chan) {
         debug("disconnect previous server connection");
-        delete $chans{$srv_chan};
-        ssl_disconnect($srv_chan);
+        close_channel($srv_chan);
         undef $srv_chan;
     }
 
@@ -255,7 +255,8 @@ sub reconnect (;$) {
 
 sub connect_attempt () {
     debug("try to connect...");
-    my $chan = ssl_connecting($uw_config{server}, $uw_config{port});
+    my $chan = ssl_connect($uw_config{server}, $uw_config{port},
+                            \&close_channel);
     return unless $chan;
 
     delete $ev_watch{try_con};
@@ -270,11 +271,7 @@ sub connect_attempt () {
         return;
     }
 
-    # connection established
-    debug("successfully connected to server (at once)");
-    $chans{$chan} = $chan;
-    $srv_chan = $chan;
-    handle_next_job();
+    on_connect($chan, "at once");
 }
 
 sub connect_pending ($) {
@@ -293,9 +290,15 @@ sub connect_pending ($) {
     }
 
     delete $ev_watch{wait_con};
-    $srv_chan = $chan;
-    debug("successfully connected to server (after wait)");
+    on_connect($chan, "after wait");
+}
 
+sub on_connect ($$) {
+    my ($chan, $msg) = @_;
+
+    debug('successfully connected to server (%s)', $msg);
+    $ev_watch{update}->set(0, $uw_config{update_interval});
+    $chans{$chan} = $srv_chan = $chan;
     handle_next_job();
 }
 
@@ -332,8 +335,19 @@ sub srv_reading_done ($$$) {
 # cleanup
 #
 
+sub close_channel ($) {
+    my ($chan) = @_;
+    ssl_disconnect($chan);
+    delete $chans{$chan};
+    if ($srv_chan eq $chan) {
+        undef $srv_chan;
+        reconnect() unless $finished;
+    }
+}
+
 sub cleanup () {
-    ssl_disconnect($_) for (values %chans);
+    $finished = 1;
+    close_channel($_) for (values %chans);
     %chans = ();
 
     ssl_destroy_context();

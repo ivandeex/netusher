@@ -28,26 +28,27 @@ our $CFG_ROOT = '/etc/userwatch';
 
 our %uw_config = (
         # common parameters
-        port        => 7501,
-        ca_cert     => "$CFG_ROOT/ca.crt",
-        debug       => 0,
-        syslog      => 1,
-        stdout      => 0,
-        timeout     => 5,
+        port            => 7501,
+        ca_cert         => "$CFG_ROOT/ca.crt",
+        debug           => 0,
+        syslog          => 1,
+        stdout          => 0,
+        timeout         => 5,
+        idle_timeout    => 240,
         # client parameters
-        server      => undef,
-        client_pem  => "$CFG_ROOT/uwclient.pem",
-        also_local  => 0,
+        server          => undef,
+        client_pem      => "$CFG_ROOT/uwclient.pem",
+        also_local      => 0,
         update_interval => 120,
         connect_interval => 5,
         # server parameters
-        server_pem  => "$CFG_ROOT/uwserver.pem",
-        mysql_host  => "localhost",
-        mysql_port  => 3306,
-        mysql_db    => undef,
-        mysql_user  => undef,
-        mysql_pass  => undef,
-        vpn_net     => undef,
+        server_pem      => "$CFG_ROOT/uwserver.pem",
+        mysql_host      => "localhost",
+        mysql_port      => 3306,
+        mysql_db        => undef,
+        mysql_user      => undef,
+        mysql_pass      => undef,
+        vpn_net         => undef,
         ldap_uri        => undef,
         ldap_bind_dn    => undef,
         ldap_bind_pass  => undef,
@@ -342,16 +343,18 @@ sub ssl_listen ($) {
         type => 'accepting',
         pending => 1,
         ssl => undef,
-        conn => $sock
+        conn => $sock,
+        addr => ":$port",
         };
+
     return $chan;
 }
 
 #
 # Accept another client connection
 #
-sub ssl_accept ($) {
-    my ($s_chan) = @_;
+sub ssl_accept ($;$) {
+    my ($s_chan, $idle_handler) = @_;
 
     my $paddr = accept(my $conn, $s_chan->{conn});
     unless ($paddr) {
@@ -359,12 +362,13 @@ sub ssl_accept ($) {
         return;
     }
     my ($port, $iaddr) = sockaddr_in($paddr);
+    my $addr = join('.', unpack('C*', $iaddr)) . ':' . $port;
 
     my $c_chan = {
         type => 'accepted',
         pending => 0,
         conn => $conn,
-        addr => join('.', unpack('C*', $iaddr)).':'.$port
+        addr => $addr
         };
 
     ssl_sock_opts($c_chan->{conn});
@@ -372,14 +376,15 @@ sub ssl_accept ($) {
     Net::SSLeay::accept($c_chan->{ssl});
     ssl_check_die("SSL accept");
 
+    set_idle_timeout($c_chan, $idle_handler);
     return $c_chan;
 }
 
 #
 # Connecting to server
 #
-sub ssl_connecting ($$) {
-    my ($server, $port) = @_;
+sub ssl_connect ($$;$) {
+    my ($server, $port, $idle_handler) = @_;
 
     my $conn;
     socket($conn, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
@@ -408,9 +413,11 @@ sub ssl_connecting ($$) {
         pending => 1,
         ssl => undef,
         conn => $conn,
+        addr => "$server:$port",
         server => $server,
         port => $port,
-        conn_params => $conn_params
+        conn_params => $conn_params,
+        idle_handler => $idle_handler
         };
 
     ssl_connected($chan, 1) if $ret;
@@ -438,7 +445,40 @@ sub ssl_connected ($;$) {
     Net::SSLeay::connect($chan->{ssl});
     ssl_check_die("SSL connect");
 
+    set_idle_timeout($chan, $chan->{idle_handler});
     return "ok";
+}
+
+#
+# Idle timeout handling
+#
+
+sub set_idle_timeout ($$) {
+    my ($chan, $idle_handler) = @_;
+
+    if ($uw_config{idle_timeout} > 0 && $idle_handler) {
+        $chan->{idle_timeout} = $uw_config{idle_timeout};
+        $chan->{idle_handler} = $idle_handler;
+        $chan->{idle_watch} = $ev_loop->timer(
+                                    $chan->{idle_timeout}, 0,
+                                    sub { _ssl_idle_handler($chan) });
+    }
+}
+
+sub ssl_update_idle ($) {
+    my ($chan) = @_;
+    if ($chan->{idle_watch}) {
+        $chan->{idle_watch}->set($chan->{idle_timeout}, 0);
+    }
+}
+
+sub _ssl_idle_handler ($) {
+    my ($chan) = @_;
+    debug('idle disconnect of %s', $chan->{addr});
+    my $handler = $chan->{idle_handler};
+    &$handler($chan);
+    delete $chan->{idle_watch};
+    ssl_disconnect($chan);
 }
 
 #
@@ -452,13 +492,15 @@ sub ssl_disconnect ($) {
     if ($chan->{ssl}) {
         Net::SSLeay::free($chan->{ssl});
         ssl_check_die("SSL free");
-        undef $chan->{ssl};
+        delete $chan->{ssl};
     }
     if ($chan->{conn}) {
         shutdown($chan->{conn}, 2);
         close($chan->{conn});
-        undef $chan->{conn}
+        delete $chan->{conn}
     }
+    delete $chan->{r_watch};
+    delete $chan->{w_watch};
 }
 
 #
@@ -538,6 +580,7 @@ sub _ssl_read_pending ($) {
 
     $chan->{$chan->{r_what}} .= $buf;
     $chan->{r_bytes} -= $bytes;
+    ssl_update_idle($chan);
     return if $chan->{r_bytes} > 0;
 
     if ($chan->{r_what} eq "r_body") {
@@ -612,6 +655,8 @@ sub _ssl_write_pending ($) {
         &$handler($chan, 0, $chan->{w_param});
         return;
     }
+
+    ssl_update_idle($chan);
     return if $bytes < 0;
 
     substr($chan->{w_buf}, 0, $bytes, "");

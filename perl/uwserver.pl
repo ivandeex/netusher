@@ -260,7 +260,6 @@ sub handle_req ($) {
     }
 
     update_user_mapping($req->{cmd}, $vpn_ip, $req->{users});
-    purge_expired_users();
     return "OK";
 }
 
@@ -410,8 +409,9 @@ sub main () {
                 [ qw(
                     port ca_cert server_pem mysql_port
                     ldap_attr_user ldap_attr_uid ldap_start_tls
-                    cache_retention user_retention purge_interval also_local
-                    syslog stdout debug timeout
+                    user_retention purge_interval also_local
+                    cache_retention idle_timeout timeout
+                    syslog stdout debug
                 )]);
     log_init();
 
@@ -447,7 +447,7 @@ sub main () {
 
 sub accept_pending ($) {
     my ($s_chan) = @_;
-    my $c_chan = ssl_accept($s_chan);
+    my $c_chan = ssl_accept($s_chan, \&close_channel);
     next unless $c_chan;
     $chans{$c_chan} = $c_chan;
     debug('client accepted: %s', $c_chan->{addr});
@@ -458,9 +458,8 @@ sub reading_done ($$$) {
     my ($c_chan, $pkt, $param) = @_;
 
     unless (defined $pkt) {
-        debug('client disconnected: %s', $c_chan->{addr});
-        ssl_disconnect($c_chan);
-        delete $chans{$c_chan};
+        debug('client disconnected during read: %s', $c_chan->{addr});
+        close_channel($c_chan);
         return;
     }
 
@@ -479,12 +478,24 @@ sub reading_done ($$$) {
 
 sub writing_done ($$$) {
     my ($c_chan, $success, $c_chan) = @_;
-    debug('finished reply to %s', $c_chan->{addr});
-    ssl_read_packet($c_chan, \&reading_done, $c_chan);
+
+    if ($success) {
+        debug('finished reply to %s', $c_chan->{addr});
+        ssl_read_packet($c_chan, \&reading_done, $c_chan);
+    } else {
+        debug('client disconnected during write: %s', $c_chan->{addr});
+        close_channel($c_chan);
+    }
+}
+
+sub close_channel ($) {
+    my ($chan) = @_;
+    ssl_disconnect($chan);
+    delete $chans{$chan};
 }
 
 sub cleanup () {
-    ssl_disconnect($_) for (values %chans);
+    close_channel($_) for (values %chans);
     %chans = ();
 
     ssl_destroy_context();
