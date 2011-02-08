@@ -204,8 +204,8 @@ sub ssl_check_die ($;$) {
     return -1;
 }
 
-sub ssl_sock_opts ($;$) {
-    my ($conn, $blocking) = @_;
+sub ssl_sock_opts ($) {
+    my ($conn) = @_;
 
     # No buffering
     my $f = select($conn); $| = 1; select $f;
@@ -213,13 +213,8 @@ sub ssl_sock_opts ($;$) {
     # Set O_NONBLOCK.
     my $v = fcntl($conn, F_GETFL, 0)
         or fail("fcntl F_GETFL: $!");  # 0 for error, 0e0 for 0.
-    if ($blocking) {
-        fcntl($conn, F_SETFL, $v & ~O_NONBLOCK)
-            or fail("fcntl F_SETFL O_NONBLOCK: $!");  # 0 for error, 0e0 for 0.
-    } else {
-        fcntl($conn, F_SETFL, $v | O_NONBLOCK)
-            or fail("fcntl F_SETFL O_NONBLOCK: $!");  # 0 for error, 0e0 for 0.
-    }
+    fcntl($conn, F_SETFL, $v | O_NONBLOCK)
+        or fail("fcntl F_SETFL O_NONBLOCK: $!");  # 0 for error, 0e0 for 0.
 }
 
 #
@@ -324,8 +319,8 @@ sub ssl_create_ssl ($$) {
 #
 # Listen for client connections
 #
-sub ssl_listen ($;$) {
-    my ($port, $blocking) = @_;
+sub ssl_listen ($) {
+    my ($port) = @_;
 
     my $sock;
     socket($sock, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
@@ -337,7 +332,7 @@ sub ssl_listen ($;$) {
     listen($sock, SOMAXCONN)
         or fail("listen ${port}: $!");
 
-    ssl_sock_opts($sock, $blocking);
+    ssl_sock_opts($sock);
 
     my $chan = {
         type => 'accepting',
@@ -351,8 +346,8 @@ sub ssl_listen ($;$) {
 #
 # Accept another client connection
 #
-sub ssl_accept ($;$) {
-    my ($s_chan, $blocking) = @_;
+sub ssl_accept ($) {
+    my ($s_chan) = @_;
 
     my $paddr = accept(my $conn, $s_chan->{conn});
     unless ($paddr) {
@@ -368,7 +363,7 @@ sub ssl_accept ($;$) {
         addr => join('.', unpack('C*', $iaddr))
         };
 
-    ssl_sock_opts($c_chan->{conn}, $blocking);
+    ssl_sock_opts($c_chan->{conn});
     $c_chan->{ssl} = ssl_create_ssl($c_chan->{conn}, $ssl_ctx);
     Net::SSLeay::accept($c_chan->{ssl});
     ssl_check_die("SSL accept");
@@ -379,8 +374,8 @@ sub ssl_accept ($;$) {
 #
 # Connecting to server
 #
-sub ssl_connecting ($$;$) {
-    my ($server, $port, $blocking) = @_;
+sub ssl_connecting ($$) {
+    my ($server, $port) = @_;
 
     my $conn;
     socket($conn, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
@@ -390,7 +385,7 @@ sub ssl_connecting ($$;$) {
         or fail("$server: host not found");
     my $conn_params = sockaddr_in($port, $ip);
 
-    ssl_sock_opts($conn, $blocking);
+    ssl_sock_opts($conn);
 
     my $ret = connect($conn, $conn_params);
 
