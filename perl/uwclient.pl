@@ -145,7 +145,9 @@ sub create_request ($$;$) {
 # typical operations
 #
 
-sub cron_job () {
+sub update_active_users () {
+    debug("update active users");
+    return unless $srv_chan;
     my $req = create_request("C", 1);
     queue_job($req, undef);
 }
@@ -181,8 +183,8 @@ sub main () {
                     server
                 )],
                 [ qw(
-                    port ca_cert client_pem also_local
-                    syslog stdout debug timeout
+                    port ca_cert client_pem update_interval also_local
+                    connect_interval syslog stdout debug timeout
                 )]);
     fail("$config: server host undefined")
         unless $uw_config{server};
@@ -192,11 +194,11 @@ sub main () {
     ssl_create_context($uw_config{client_pem}, $uw_config{ca_cert});
     ev_create_loop();
 
-    reconnect();
+    reconnect(1);
+    $ev_watch{update} = $ev_loop->timer(0, $uw_config{update_interval},
+                                        \&update_active_users);
+
     debug("waiting for server...");
-
-    cron_job();
-
     $ev_loop->loop();
     exit(0);
 }
@@ -213,8 +215,7 @@ sub queue_job ($$) {
 
 sub handle_next_job () {
     unless (@jobs) {
-        debug("no more jobs. stopping.");
-        $ev_loop->unloop();
+        debug("no jobs");
         return;
     }
     unless ($srv_chan) {
@@ -231,7 +232,9 @@ sub handle_next_job () {
 # reconnections
 #
 
-sub reconnect () {
+sub reconnect (;$) {
+    my ($now) = @_;
+
     # close previous server connection, if any
     if ($srv_chan) {
         debug("disconnect previous server connection");
@@ -243,7 +246,10 @@ sub reconnect () {
     # initiate new connection to server
     delete $ev_watch{try_con};
     delete $ev_watch{wait_con};
-    $ev_watch{try_con} = $ev_loop->timer(0, 2, sub { connect_attempt() });
+    $ev_watch{try_con} = $ev_loop->timer(
+                            $now ? 0 : $uw_config{connect_interval},
+                            $uw_config{connect_interval},
+                            \&connect_attempt);
     debug("reconnection started...");
 }
 
@@ -311,7 +317,14 @@ sub srv_writing_done ($$$) {
 
 sub srv_reading_done ($$$) {
     my ($chan, $reply, $job) = @_;
-    debug("received reply %s", $job->{req});
+
+    unless (defined $reply) {
+        unshift @jobs, $job;
+        reconnect();
+        return;        
+    }
+
+    debug('received reply %s', $reply);
     handle_next_job();
 }
 

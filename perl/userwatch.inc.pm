@@ -38,6 +38,8 @@ our %uw_config = (
         server      => undef,
         client_pem  => "$CFG_ROOT/uwclient.pem",
         also_local  => 0,
+        update_interval => 120,
+        connect_interval => 5,
         # server parameters
         server_pem  => "$CFG_ROOT/uwserver.pem",
         mysql_host  => "localhost",
@@ -54,6 +56,8 @@ our %uw_config = (
         ldap_attr_user  => 'uid',
         ldap_attr_uid   => 'uidNumber',
         cache_retention => 300,
+        user_retention  => 300,
+        purge_interval  => 300,
     );
 
 sub read_config ($$$) {
@@ -360,7 +364,7 @@ sub ssl_accept ($) {
         type => 'accepted',
         pending => 0,
         conn => $conn,
-        addr => join('.', unpack('C*', $iaddr))
+        addr => join('.', unpack('C*', $iaddr)).':'.$port
         };
 
     ssl_sock_opts($c_chan->{conn});
@@ -484,7 +488,7 @@ sub _ssl_read_pending ($) {
     # ssl might need re-negotiation etc
     #
     if ($chan->{r_first}) {
-        debug('switching to read/write: watch:%s', $chan->{r_watch});
+        #debug('switching to read/write: watch:%s', $chan->{r_watch});
         $chan->{r_watch}->events(&EV::READ | &EV::WRITE);
         $chan->{r_first} = 0;
     }
@@ -518,7 +522,8 @@ sub _ssl_read_pending ($) {
 
     my $handler = $chan->{r_handler};
     unless (defined $buf) {
-        info("read failed: $!");
+        info('read failed: %s', $!);
+        delete $chan->{r_watch};
         &$handler($chan, undef, $chan->{r_param});
         return;
     }
@@ -602,7 +607,8 @@ sub _ssl_write_pending ($) {
 
     my $handler = $chan->{w_handler};
     unless ($bytes) {
-        info('write bytes:%s error:%s', $bytes, $!);
+        info('write failed:%s', $!);
+        delete $chan->{w_watch};
         &$handler($chan, 0, $chan->{w_param});
         return;
     }

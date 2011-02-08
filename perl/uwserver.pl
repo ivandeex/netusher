@@ -384,10 +384,11 @@ sub update_user_mapping ($$$) {
 }
 
 sub purge_expired_users () {
+    debug("purge expired users");
     mysql_execute(sprintf("
         UPDATE uw_users SET running = 0
         WHERE running = 1 AND end_time < DATE_SUB(NOW(), INTERVAL %s SECOND)",
-        $uw_config{cache_retention}));
+        $uw_config{user_retention}));
 }
 
 sub login_weight ($) {
@@ -409,7 +410,7 @@ sub main () {
                 [ qw(
                     port ca_cert server_pem mysql_port
                     ldap_attr_user ldap_attr_uid ldap_start_tls
-                    cache_retention also_local
+                    cache_retention user_retention purge_interval also_local
                     syslog stdout debug timeout
                 )]);
     log_init();
@@ -436,7 +437,10 @@ sub main () {
     $ev_watch{s_accept} = $ev_loop->io($s_chan->{conn}, &EV::READ,
                                         sub { accept_pending($s_chan) });
 
-    debug("waiting for client...");
+    $ev_watch{purge} = $ev_loop->timer(0, $uw_config{purge_interval},
+                                        \&purge_expired_users);
+
+    debug("waiting for clients...");
     $ev_loop->loop();
     exit(0);
 }
@@ -447,7 +451,7 @@ sub accept_pending ($) {
     next unless $c_chan;
     $chans{$c_chan} = $c_chan;
     debug('client accepted: %s', $c_chan->{addr});
-    ssl_read_packet($c_chan, \&reading_done, undef);
+    ssl_read_packet($c_chan, \&reading_done, $c_chan);
 }
 
 sub reading_done ($$$) {
@@ -463,20 +467,20 @@ sub reading_done ($$$) {
     my $req = parse_req($pkt);
     my $ret;
     if (ref($req) eq 'HASH') {
-        debug("request ok");
+        debug('request from %s', $c_chan->{addr});
         $ret = handle_req($req);
     } else {
         info("invalid request (error:$req)");
         $ret = "invalid request";
     }
 
-    ssl_write_packet($c_chan, $ret, \&writing_done, undef);
+    ssl_write_packet($c_chan, $ret, \&writing_done, $c_chan);
 }
 
 sub writing_done ($$$) {
-    my ($c_chan, $success, $param) = @_;
-    ssl_disconnect($c_chan);
-    delete $chans{$c_chan};
+    my ($c_chan, $success, $c_chan) = @_;
+    debug('finished reply to %s', $c_chan->{addr});
+    ssl_read_packet($c_chan, \&reading_done, $c_chan);
 }
 
 sub cleanup () {
