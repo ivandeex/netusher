@@ -6,19 +6,21 @@
 
 use strict;
 use FindBin qw($Bin);
-require "$Bin/userwatch.inc.pm";
+require "$Bin/uw-common.inc.pm";
+require "$Bin/uw-ssl.inc.pm";
+require "$Bin/uw-ldap.inc.pm";
 
 #
 # require: perl-DBD-mysql, perl-LDAP, perl-EV
 #
 use DBI;
-use Net::LDAP;
 use EV;
 
-our ($config_file, $progname, %uw_config, $ev_loop, %ev_watch);
-my  (%chans);
+our ($config_file, $progname, %uw_config);
+our ($ev_loop, %ev_watch);
+
 my  ($dbh, %sth_cache);
-my  ($ldap, %uid_cache, $vpn_regex);
+my  ($vpn_regex);
 
 #
 # Currently only one "main" user per host is allowed.
@@ -33,122 +35,6 @@ my %login_method_weight = (
     'XTY' => 1,
     );
 my $min_login_weight = 5;
-
-#
-# connection to ldap for browsing
-#
-sub ldap_init () {
-    ldap_close();
-    my ($msg, $ldap_conn)
-        = ldap_connect($uw_config{ldap_bind_dn}, undef,
-                        $uw_config{ldap_bind_pass}, 0);
-    $ldap = $ldap_conn unless $msg;
-    # flush ldap cache at every re-connection
-    %uid_cache = ();
-    return $msg;
-}
-
-sub ldap_close () {
-    if (defined $ldap) {
-        eval { $ldap->unbind() };
-        undef $ldap;
-    }
-}
-
-#
-# connection to ldap for browsing or to to check credentials
-#
-sub ldap_connect ($$$$) {
-    my ($bind_dn, $user, $pass, $just_check) = @_;
-
-    my $conn = Net::LDAP->new($uw_config{ldap_uri},
-                                timeout => $uw_config{ldap_timeout},
-                                version => 3)
-        or return "ldap server down";
-
-    if ($uw_config{ldap_start_tls}) {
-        $conn->start_tls()
-            or return "ldap tls failed";
-    }
-
-    if (!$bind_dn) {
-        $bind_dn = sprintf('%s=%s,%s', $uw_config{ldap_attr_user},
-                            $user, $uw_config{ldap_user_base});
-    }
-    my $res = $conn->bind($bind_dn, password => $pass);
-
-    $conn->unbind() if $just_check;
-
-    debug("ldap auth uri:%s tls:%s bind:%s pass:%s returns: %s",
-            $uw_config{ldap_uri}, $uw_config{ldap_start_tls},
-            $bind_dn, $pass, $res->error());
-    return "invalid password" if $res->code();
-
-    # success
-    return (0, $conn);
-}
-
-#
-# return ldap uidNumber for given user
-#
-sub ldap_get_uid ($) {
-    my ($user) = @_;
-    my ($uid, $res);
-
-    # try to fetch uid from cache
-    my $stamp = time();
-    if (exists($uid_cache{$user})) {
-        if ($stamp - $uid_cache{$user}{stamp} < $uw_config{cache_retention}) {
-            $uid = $uid_cache{$user}{uid};
-            debug("ldap get uid user:$user uid:$uid from cache");
-            return $uid;
-        }
-        delete $uid_cache{$user};
-    }
-
-    # search for uid in ldap.
-    # ldap server might have disconnected due to timeout.
-    # if so, we try to re-connect and repeat the search.
-    for (my $try = 1; $try <= 2; $try++) {
-        if ($ldap) {
-            $res = $ldap->search(
-                    base => $uw_config{ldap_user_base},
-                    filter => sprintf('(%s=%s)', $uw_config{ldap_attr_user}, $user),
-                    scope => 'one', defer => 'never',
-                    attrs => [ $uw_config{ldap_attr_uid} ]
-                    );
-        }
-        if (!$ldap || $res->code() == 1) {
-            # unexpected eof. try to reconnect
-            debug("restoring ldap connection ($try)");
-            undef $ldap;
-            ldap_init();
-            # a little delay
-            select(undef, undef, undef, ($try - 1) * 0.100);
-        } else {
-            last;
-        }
-    }
-
-    # fetch uid from ldap array
-    unless ($res) {
-        debug("ldap get uid user:$user server down");
-        return;
-    }
-    if (!$res->code()) {
-        my $entry = $res->pop_entry();
-        if ($entry) {
-            $uid  = $entry->get_value($uw_config{ldap_attr_uid});
-        }
-        # update cache with defined or undefined uid
-        $uid_cache{$user}{uid} = $uid;
-        $uid_cache{$user}{stamp} = $stamp;
-    }
-
-    debug("ldap_get_uid user:%s uid:%s message:%s", $user, $uid, $res->error());
-
-    return $uid;
-}
 
 #
 # parse request string.
@@ -271,14 +157,15 @@ sub handle_req ($) {
     return "OK";
 }
 
+##############################################
+# mysql stuff
 #
-# connect to mysql.
-#
+
 sub mysql_connect () {
     mysql_close();
-    $dbh = DBI->connect(
-                "DBI:mysql:$uw_config{mysql_db};host=$uw_config{mysql_host}",
-                $uw_config{mysql_user}, $uw_config{mysql_pass})
+    my $uri = sprintf("DBI:mysql:%s;host=%s",
+                    $uw_config{mysql_db}, $uw_config{mysql_host});
+    $dbh = DBI->connect($uri, $uw_config{mysql_user}, $uw_config{mysql_pass})
 		or fail("cannot connect to database");
     $dbh->{mysql_enable_utf8} = 1;
     $dbh->{mysql_auto_reconnect} = 1;
@@ -459,9 +346,7 @@ sub main () {
     }
 
     my $s_chan = ssl_listen($uw_config{port});
-    $chans{$s_chan} = $s_chan;
-    $ev_watch{s_accept} = $ev_loop->io($s_chan->{conn}, &EV::READ,
-                                        sub { ssl_accept_pending($s_chan) });
+    ev_add_chan($s_chan, 's_acccept', &EV::READ, \&ssl_accept_pending);
 
     $ev_watch{purge} = $ev_loop->timer(0, $uw_config{purge_interval},
                                         \&purge_expired_users);
@@ -473,19 +358,19 @@ sub main () {
 
 sub ssl_accept_pending ($) {
     my ($s_chan) = @_;
-    my $c_chan = ssl_accept($s_chan, \&close_channel);
+    my $c_chan = ssl_accept($s_chan, \&ev_close);
     next unless $c_chan;
-    $chans{$c_chan} = $c_chan;
-    debug('client accepted: %s', $c_chan->{addr});
-    ssl_read_packet($c_chan, \&ssl_reading_done, $c_chan);
+    ev_add_chan($c_chan);
+    debug("%s: client accepted", $c_chan->{addr});
+    ssl_read_packet($c_chan, \&_ssl_read_done, 0);
 }
 
-sub ssl_reading_done ($$$) {
+sub _ssl_read_done ($$$) {
     my ($c_chan, $pkt, $param) = @_;
 
     unless (defined $pkt) {
-        debug('client disconnected during read: %s', $c_chan->{addr});
-        close_channel($c_chan);
+        debug("%s: disconnected during read", $c_chan->{addr});
+        ev_close($c_chan);
         return;
     }
 
@@ -495,34 +380,27 @@ sub ssl_reading_done ($$$) {
         debug('request from %s', $c_chan->{addr});
         $ret = handle_req($req);
     } else {
-        info("invalid request (error:$req)");
+        info("%s: invalid request (error:%s)", $c_chan->{addr}, $req);
         $ret = "invalid request";
     }
 
-    ssl_write_packet($c_chan, $ret, \&ssl_writing_done, $c_chan);
+    ssl_write_packet($c_chan, $ret, \&_ssl_write_done, 0);
 }
 
-sub ssl_writing_done ($$$) {
-    my ($c_chan, $success, $c_chan) = @_;
+sub _ssl_write_done ($$$) {
+    my ($c_chan, $success, $param) = @_;
 
     if ($success) {
-        debug('finished reply to %s', $c_chan->{addr});
-        ssl_read_packet($c_chan, \&ssl_reading_done, $c_chan);
+        debug("%s: reply completed", $c_chan->{addr});
+        ssl_read_packet($c_chan, \&_ssl_read_done, $c_chan);
     } else {
-        debug('client disconnected during write: %s', $c_chan->{addr});
-        close_channel($c_chan);
+        debug("%s: disconnected during write", $c_chan->{addr});
+        ev_close($c_chan);
     }
 }
 
-sub close_channel ($) {
-    my ($chan) = @_;
-    ssl_disconnect($chan);
-    delete $chans{$chan};
-}
-
 sub cleanup () {
-    close_channel($_) for (values %chans);
-    %chans = ();
+    ev_close_all();
     ssl_destroy_context();
     mysql_close();
     ldap_close();

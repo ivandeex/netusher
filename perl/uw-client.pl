@@ -6,7 +6,8 @@
 
 use strict;
 use FindBin qw($Bin);
-require "$Bin/userwatch.inc.pm";
+require "$Bin/uw-common.inc.pm";
+require "$Bin/uw-ssl.inc.pm";
 
 #
 # require: perl-User-Utmp
@@ -17,8 +18,9 @@ require "$Bin/userwatch.inc.pm";
 use User::Utmp qw(:constants :utmpx);
 use IO::Socket::UNIX;
 
-our ($config_file, $progname, %uw_config, $ev_loop, %ev_watch);
-my  (%chans, $srv_chan, @jobs, $finished);
+our ($config_file, $progname, %uw_config);
+our ($ev_loop, %ev_watch);
+my  ($srv_chan, @jobs, $finished);
 my  (%local_users, $passwd_modified_stamp);
 my  ($unix_seqno);
 
@@ -37,6 +39,7 @@ sub unix_listen () {
     $sock->blocking(0) or fail("unix non-blocking: $!");
     my $s_chan = {
         type => 'accepting',
+        destructor => \&unix_disconnect,
         pending => 1,
         ssl => undef,
         conn => $sock,
@@ -44,9 +47,7 @@ sub unix_listen () {
         unix => 1,
         path => $path
         };
-    $chans{$s_chan} = $s_chan;
-    $ev_watch{u_accept} = $ev_loop->io($s_chan->{conn}, &EV::READ,
-                                    sub { unix_accept_pending($s_chan) });
+    ev_add_chan($s_chan, 'u_accept', &EV::READ, \&unix_accept_pending);
     debug("unix listen on $path");
 }
 
@@ -61,6 +62,7 @@ sub unix_accept_pending () {
     my $addr = sprintf('unix_%04d', ++$unix_seqno);
     my $c_chan = {
         type => 'accepted',
+        destructor => \&unix_disconnect,
         pending => 0,
         ssl => undef,
         conn => $conn,
@@ -70,16 +72,17 @@ sub unix_accept_pending () {
 
     # start reading
     $conn->blocking(0) or fail("unix client non-blocking: $!");
-    init_timeouts($c_chan, \&close_channel);
+    init_timeouts($c_chan, \&ev_close);
     $c_chan->{r_buf} = "";
-    start_transmission($c_chan, &EV::READ, \&unix_read_pending);
+    init_transmission($c_chan, &EV::READ, \&_unix_read_pending);
     debug('accepted unix %s', $c_chan->{addr});
     return $c_chan;
 }
 
-sub unix_read_pending ($) {
+sub _unix_read_pending ($) {
     my ($chan) = @_;
 
+    fire_transmission($chan);
     my $len = $chan->{conn}->sysread($chan->{r_buf}, 1024, length($chan->{r_buf}));
     if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
         debug("%s: will read later", $chan->{addr});
@@ -93,7 +96,7 @@ sub unix_read_pending ($) {
             postpone_timeouts($chan);
         } else {
             info("%s: read failed: %s", $chan->{addr}, $!);
-            close_channel($chan);
+            ev_close($chan);
         }
         return;
     }
@@ -104,11 +107,12 @@ sub unix_read_pending ($) {
 
     my $reply = handle_unix_request($chan->{r_buf});
     $chan->{w_buf} = $reply . "\n";
-    start_transmission($chan, &EV::WRITE, \&unix_write_pending);
+    init_transmission($chan, &EV::WRITE, \&_unix_write_pending);
+    fire_transmission($chan);
     debug("sending to %s: \"%s\"", $chan->{addr}, $reply);
 }
 
-sub unix_write_pending ($) {
+sub _unix_write_pending ($) {
     my ($chan) = @_;
 
     my $len = $chan->{conn}->syswrite($chan->{w_buf});
@@ -120,7 +124,7 @@ sub unix_write_pending ($) {
     debug("%s: write %s bytes", $chan->{addr}, defined($len) ? $len : "?");
     unless ($len) {
         info("%s: write failed: %s", $chan->{addr}, $!);
-        close_channel($chan);
+        ev_close($chan);
         return;
     }
 
@@ -130,7 +134,7 @@ sub unix_write_pending ($) {
         return;
     }
 
-    close_channel($chan);
+    ev_close($chan);
 }
 
 sub unix_disconnect ($) {
@@ -359,7 +363,7 @@ sub handle_next_job () {
 
     my $job = shift @jobs;
     debug("sending job %s", $job->{req});
-    ssl_write_packet($srv_chan, $job->{req}, \&srv_writing_done, $job);
+    ssl_write_packet($srv_chan, $job->{req}, \&_srv_write_done, $job);
 }
 
 #
@@ -372,7 +376,7 @@ sub reconnect (;$) {
     # close previous server connection, if any
     if ($srv_chan) {
         debug("disconnect previous server connection");
-        close_channel($srv_chan);
+        ev_close($srv_chan);
         undef $srv_chan;
     }
 
@@ -388,19 +392,14 @@ sub reconnect (;$) {
 
 sub connect_attempt () {
     debug("try to connect...");
-    my $chan = ssl_connect($uw_config{server}, $uw_config{port},
-                            \&close_channel);
+    my $chan = ssl_connect($uw_config{server}, $uw_config{port}, \&ev_close);
     return unless $chan;
 
     delete $ev_watch{try_con};
     delete $ev_watch{wait_con};
 
     if ($chan->{pending}) {
-        #debug("connection is pending, wating on socket");
-        $chans{$chan} = $chan;
-        $ev_watch{wait_con} = $ev_loop->io($chan->{conn},
-                                        &EV::READ | &EV::WRITE,
-                                        sub { connect_pending($chan) });
+        ev_add_chan($chan, 'wait_con', &EV::READ | &EV::WRITE, \&connect_pending);
         return;
     }
 
@@ -426,12 +425,22 @@ sub connect_pending ($) {
     on_connect($chan, "after wait");
 }
 
+sub _srv_disconnect ($) {
+    my ($chan) = @_;
+    ssl_disconnect($chan);
+    undef $srv_chan;
+    reconnect() unless $finished;
+}
+
 sub on_connect ($$) {
     my ($chan, $msg) = @_;
 
-    debug('successfully connected to server (%s)', $msg);
+    debug("%s: successfully connected to server", $msg);
     $ev_watch{update}->set(0, $uw_config{update_interval});
-    $chans{$chan} = $srv_chan = $chan;
+
+    $chan->{destructor} = \&_srv_disconnect;
+    ev_add_chan($srv_chan = $chan);
+
     handle_next_job();
 }
 
@@ -439,7 +448,7 @@ sub on_connect ($$) {
 # reading and writing
 #
 
-sub srv_writing_done ($$$) {
+sub _srv_write_done ($$$) {
     my ($chan, $success, $job) = @_;
 
     unless ($success) {
@@ -448,10 +457,10 @@ sub srv_writing_done ($$$) {
         return;
     }
 
-    ssl_read_packet($srv_chan, \&srv_reading_done, $job);
+    ssl_read_packet($srv_chan, \&_srv_read_done, $job);
 }
 
-sub srv_reading_done ($$$) {
+sub _srv_read_done ($$$) {
     my ($chan, $reply, $job) = @_;
 
     unless (defined $reply) {
@@ -468,24 +477,9 @@ sub srv_reading_done ($$$) {
 # cleanup
 #
 
-sub close_channel ($) {
-    my ($chan) = @_;
-    if ($chan->{unix}) {
-        unix_disconnect($chan);
-    } else {
-        ssl_disconnect($chan);
-    }
-    delete $chans{$chan};
-    if ($srv_chan eq $chan) {
-        undef $srv_chan;
-        reconnect() unless $finished;
-    }
-}
-
 sub cleanup () {
     $finished = 1;
-    close_channel($_) for (values %chans);
-    %chans = ();
+    ev_close_all();
     ssl_destroy_context();
     end_daemon();
 }

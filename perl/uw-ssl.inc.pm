@@ -1,217 +1,31 @@
 #!/usr/bin/perl
 #
-# UserWatch common and SSL functions
+# UserWatch
+# SSL functions
 # $Id$
 #
 
 use strict;
+use FindBin qw($Bin);
+require "$Bin/uw-common.inc.pm";
 
 #
-# require: perl-Net-SSLeay, perl-EV
+# require: perl-Net-SSLeay
 #
-use Carp;
 use Errno;
 use Fcntl;
 use Socket;
 use Net::SSLeay ();
 use Net::SSLeay::Handle;
 use Sys::Syslog;
-use POSIX;
-use EV;
 
-our ($ev_loop, %ev_watch, $ssl_ctx, $in_parent);
-my  ($pid_written);
-
-##############################################
-# Configuration file
-#
-
-our $progname = $0;
-$progname =~ s!.*/!!g;
-$progname =~ s!\..*$!!g;
-
-our $config_root = '/etc/userwatch';
-our $config_file = "$config_root/$progname.conf";
-
-our %uw_config = (
-        # common parameters
-        port            => 7501,
-        peer_pem        => "$config_root/$progname.pem",
-        ca_cert         => "$config_root/ca.crt",
-        pid_file        => "/var/run/userwatch/$progname.pid",
-        daemonize       => 1,
-        debug           => 0,
-        stacktrace      => 0,
-        syslog          => 1,
-        stdout          => 0,
-        idle_timeout    => 240,
-        rw_timeout      => 10,
-        # client parameters
-        server          => undef,
-        also_local      => 0,
-        update_interval => 120,
-        connect_interval => 5,
-        unix_socket     => "/var/run/userwatch/$progname.sock",
-        # server parameters
-        mysql_host      => "localhost",
-        mysql_port      => 3306,
-        mysql_db        => undef,
-        mysql_user      => undef,
-        mysql_pass      => undef,
-        vpn_net         => undef,
-        ldap_uri        => undef,
-        ldap_bind_dn    => undef,
-        ldap_bind_pass  => undef,
-        ldap_start_tls  => 0,
-        ldap_user_base  => undef,
-        ldap_attr_user  => 'uid',
-        ldap_attr_uid   => 'uidNumber',
-        ldap_timeout    => 5,
-        cache_retention => 300,
-        user_retention  => 300,
-        purge_interval  => 300,
-    );
-
-sub read_config ($$$) {
-    my ($config, $required, $optional) = @_;
-    my (%h_required, %h_allowed);
-    $h_allowed{$_} = 1 for (@$required, @$optional);
-    $h_required{$_} = 1 for (@$required);
-
-    open (my $file, $config)
-        or fail("$config: configuration file not found");
-    while (<$file>) {
-        next if /^\s*$/ || /^\s*#/;
-        if (/^\s*(\w+)\s*=\s*(\S+)\s*$/) {
-            my ($param, $value) = ($1, $2);
-            $value = "" if $value eq '""' || $value eq "''";
-            fail("$config: unknown parameter \"$param\"")
-                if !exists($uw_config{$param}) || !exists($h_allowed{$param});
-            if ($uw_config{$param} !~ /^\d+$/ || $value =~ /^\d+$/) {
-                $uw_config{$param} = $value;
-                next;
-            }
-        }
-        fail("$config: configuration error in line $.");
-    }
-    close ($file);
-
-    for my $param (sort keys %h_required) {
-        fail("$config: missing required parameter \"$param\"")
-            unless defined $uw_config{$param};
-    }
-
-    $uw_config{stdout} = 1 unless $uw_config{syslog};
-}
-
-##############################################
-# Logging
-#
-
-sub log_init () {
-    return unless $uw_config{syslog};
-    my $prog = $0;
-    $prog =~ s!^.*/!!;
-    $prog =~ s!\..*$!!;
-    openlog($prog, "cons,pid", "daemon");
-}
-
-$SIG{__DIE__} = sub { fail(join("\n", @_)); };
-$SIG{__WARN__} = sub { info(join("\n", @_)); };
-
-sub fail ($@) {
-    my $fmt = shift;
-    chomp(my $msg = "[ fail] " . sprintf($fmt, @_));
-    syslog("err", $msg) if $uw_config{syslog};
-    undef $SIG{__DIE__};
-    $msg = sprintf("[%5d] ", $$) . $msg;
-    if ($uw_config{stacktrace}) {
-        confess($msg);
-    } else {
-        die($msg);
-    }
-}
-
-sub info ($@) {
-    my $fmt = shift;
-    chomp(my $msg = "[ info] " . sprintf($fmt, @_));
-    syslog("notice", $msg) if $uw_config{syslog};
-    printf("[%5d] %s\n", $$, $msg) if $uw_config{stdout};
-}
-
-sub debug ($@) {
-    return unless $uw_config{debug};
-    my $fmt = shift;
-    chomp(my $msg = "[debug] " . sprintf($fmt, @_));
-    syslog("info", $msg) if $uw_config{syslog};
-    printf("[%5d] %s\n", $$, $msg) if $uw_config{stdout};    
-}
-
-##############################################
-# Event loop
-#
-
-sub ev_create_loop () {
-    $ev_loop = EV::default_loop();
-    $ev_watch{s_int} = $ev_loop->signal('INT', sub { ev_signaled('INT') });
-    $ev_watch{s_term} = $ev_loop->signal('TERM', sub { ev_signaled('TERM') });
-    $ev_watch{s_quit} = $ev_loop->signal('QUIT', sub { ev_signaled('QUIT') });
-}
-
-sub ev_signaled ($) {
-    my ($signal) = @_;
-    debug("catch $signal");
-    $ev_loop->unloop();
-}
-
-sub daemonize () {
-    return 0 unless $uw_config{daemonize};
-
-    my $pid_file = $uw_config{pid_file};
-    if ($pid_file) {
-        fail("$pid_file: pid file already exists") if -e $pid_file;
-        (my $pid_dir = $pid_file) =~ s!/+[^/]*$!!;
-        mkdir($pid_dir);
-        (-d $pid_dir) or fail("$pid_dir: directory does not exist");
-        (-w $pid_dir) or fail("$pid_dir: directory is not writeable");
-    }
-
-    defined(my $pid = fork())  or fail("can't fork: $!");
-    $in_parent = $pid;
-    if ($in_parent) {
-        debug("parent exits");
-        exit(0);
-    }
-
-    chdir('/')                 or fail("can't chdir to /: $!");
-    open(STDIN,  '</dev/null') or fail("can't read /dev/null: $!");
-    open(STDOUT, '>/dev/null') or fail("can't write to /dev/null: $!");
-    open(STDERR, '>/dev/null') or fail("can't write to /dev/null: $!");
-    setsid()                   or fail("can't start a new session: $!");
-    umask(022);
-    $uw_config{stdout} = 0;
-
-    $| = 1;
-    if (open(my $pf, "> $pid_file")) {
-        print $pf $$;
-        close $pf;
-    }
-    $pid_written = 1;
-
-    debug("daemonized");
-    return $$;
-}
-
-sub end_daemon () {
-    unless ($in_parent) {
-        unlink($uw_config{pid_file}) if $pid_written;
-        info("$progname finished");
-    }
-}
+our ($config_root, %uw_config);
 
 ##############################################
 # Safe wrappers around Net::SSLeay
 #
+
+my ($ssl_ctx);
 
 #
 # Somehow you have to guarantee that these are called just once. Alas,
@@ -387,9 +201,10 @@ sub ssl_create_ssl ($$) {
     return $ssl;
 }
 
-#
+##############################################
 # Listen for client connections
 #
+
 sub ssl_listen ($) {
     my ($port) = @_;
 
@@ -407,6 +222,7 @@ sub ssl_listen ($) {
 
     my $chan = {
         type => 'accepting',
+        destructor => \&ssl_disconnect,
         pending => 1,
         ssl => undef,
         conn => $sock,
@@ -416,9 +232,6 @@ sub ssl_listen ($) {
     return $chan;
 }
 
-#
-# Accept another client connection
-#
 sub ssl_accept ($;$) {
     my ($s_chan, $close_handler) = @_;
 
@@ -432,6 +245,7 @@ sub ssl_accept ($;$) {
 
     my $c_chan = {
         type => 'accepted',
+        destructor => \&ssl_disconnect,
         pending => 0,
         conn => $conn,
         addr => $addr
@@ -446,9 +260,10 @@ sub ssl_accept ($;$) {
     return $c_chan;
 }
 
-#
+##############################################
 # Connecting to server
 #
+
 sub ssl_connect ($$;$) {
     my ($server, $port, $close_handler) = @_;
 
@@ -476,6 +291,7 @@ sub ssl_connect ($$;$) {
 
     my $chan = {
         type => 'connecting',
+        destructor => \&ssl_disconnect,
         pending => 1,
         ssl => undef,
         conn => $conn,
@@ -489,7 +305,6 @@ sub ssl_connect ($$;$) {
     ssl_connected($chan, 1) if $ret;
     return $chan;
 }
-
 
 sub ssl_connected ($;$) {
     my ($chan, $already_connected) = @_;
@@ -516,62 +331,6 @@ sub ssl_connected ($;$) {
 }
 
 #
-# Idle timeout handling
-#
-
-sub init_timeouts ($$) {
-    my ($chan, $close_handler) = @_;
-
-    unless ($close_handler) {
-        delete $chan->{close_handler};
-        delete $chan->{idle_watch};
-        delete $chan->{rwt_watch};
-        return;
-    }
-    $chan->{close_handler} = $close_handler;
-
-    if ($uw_config{idle_timeout} > 0) {
-        $chan->{idle_timeout} = $uw_config{idle_timeout};
-        $chan->{idle_watch} = $ev_loop->timer(
-                                    $chan->{idle_timeout}, $chan->{idle_timeout},
-                                    sub { _idle_close_handler($chan) });
-    }
-
-    if ($uw_config{rw_timeout} > 0) {
-        $chan->{rw_timeout} = $uw_config{rw_timeout};
-        $chan->{rwt_watch} = $ev_loop->timer_ns(
-                                    $chan->{rw_timeout}, $chan->{rw_timeout},
-                                    sub { _idle_close_handler($chan) });
-    }
-}
-
-sub start_transmission ($$$) {
-    my ($chan, $io_mask, $io_handler) = @_;
-    $chan->{io_watch} = $ev_loop->io($chan->{conn}, $io_mask,
-                                    sub { &$io_handler($chan) });
-    $chan->{rwt_watch}->again() if $chan->{rwt_watch};
-}
-
-sub end_transmission ($) {
-    my ($chan) = @_;
-    $chan->{rwt_watch}->stop()  if $chan->{rwt_watch};
-    delete $chan->{io_watch};
-}
-
-sub postpone_timeouts ($) {
-    my ($chan) = @_;
-    $chan->{idle_watch}->again() if $chan->{idle_watch};
-    $chan->{rwt_watch}->again() if $chan->{rwt_watch};
-}
-
-sub _idle_close_handler ($) {
-    my ($chan) = @_;
-    debug("%s: idle disconnect", $chan->{addr});
-    &{$chan->{close_handler}}($chan);
-    ssl_disconnect($chan);
-}
-
-#
 # Detach and close connection
 #
 
@@ -594,7 +353,7 @@ sub ssl_disconnect ($) {
     }
 }
 
-#
+##############################################
 # Packet reading
 #
 
@@ -606,8 +365,7 @@ sub ssl_read_packet () {
     $chan->{r_body} = "";
     $chan->{r_what} = "r_head";
     $chan->{r_bytes} = 5;
-    $chan->{r_first} = 1;
-    start_transmission($chan, &EV::READ, \&_ssl_read_pending);
+    init_transmission($chan, &EV::READ, \&_ssl_read_pending);
 }
 
 sub _ssl_read_pending ($) {
@@ -617,10 +375,7 @@ sub _ssl_read_pending ($) {
     # reset wait mode to read/write after first byte.
     # ssl might need re-negotiation etc
     #
-    if ($chan->{r_first}) {
-        $chan->{io_watch}->events(&EV::READ | &EV::WRITE);
-        $chan->{r_first} = 0;
-    }
+    fire_transmission($chan, &EV::READ | &EV::WRITE);
 
     #
     # 16384 is the maximum amount read() can return.
@@ -703,7 +458,7 @@ sub _ssl_read_pending ($) {
     return;
 }
 
-#
+##############################################
 # Packet writing
 #
 
@@ -718,7 +473,8 @@ sub ssl_write_packet ($$$$) {
     $chan->{w_handler} = $handler;
     $chan->{w_param} = $param;
     $chan->{w_buf} = $head . $buf . "\n";
-    start_transmission($chan, &EV::READ | &EV::WRITE, \&_ssl_write_pending);
+    init_transmission($chan, &EV::READ | &EV::WRITE, \&_ssl_write_pending);
+    fire_transmission($chan);
 }
 
 sub _ssl_write_pending ($) {
