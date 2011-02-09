@@ -462,7 +462,7 @@ sub main () {
     my $s_chan = ssl_listen($uw_config{port});
     $chans{$s_chan} = $s_chan;
     $ev_watch{s_accept} = $ev_loop->io($s_chan->{conn}, &EV::READ,
-                                        sub { accept_pending($s_chan) });
+                                        sub { ssl_accept_pending($s_chan) });
 
     $ev_watch{purge} = $ev_loop->timer(0, $uw_config{purge_interval},
                                         \&purge_expired_users);
@@ -472,16 +472,16 @@ sub main () {
     exit(0);
 }
 
-sub accept_pending ($) {
+sub ssl_accept_pending ($) {
     my ($s_chan) = @_;
     my $c_chan = ssl_accept($s_chan, \&close_channel);
     next unless $c_chan;
     $chans{$c_chan} = $c_chan;
     debug('client accepted: %s', $c_chan->{addr});
-    ssl_read_packet($c_chan, \&reading_done, $c_chan);
+    ssl_read_packet($c_chan, \&ssl_reading_done, $c_chan);
 }
 
-sub reading_done ($$$) {
+sub ssl_reading_done ($$$) {
     my ($c_chan, $pkt, $param) = @_;
 
     unless (defined $pkt) {
@@ -500,15 +500,15 @@ sub reading_done ($$$) {
         $ret = "invalid request";
     }
 
-    ssl_write_packet($c_chan, $ret, \&writing_done, $c_chan);
+    ssl_write_packet($c_chan, $ret, \&ssl_writing_done, $c_chan);
 }
 
-sub writing_done ($$$) {
+sub ssl_writing_done ($$$) {
     my ($c_chan, $success, $c_chan) = @_;
 
     if ($success) {
         debug('finished reply to %s', $c_chan->{addr});
-        ssl_read_packet($c_chan, \&reading_done, $c_chan);
+        ssl_read_packet($c_chan, \&ssl_reading_done, $c_chan);
     } else {
         debug('client disconnected during write: %s', $c_chan->{addr});
         close_channel($c_chan);

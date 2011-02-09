@@ -119,8 +119,7 @@ $SIG{__WARN__} = sub { info(join("\n", @_)); };
 
 sub fail ($@) {
     my $fmt = shift;
-    my $msg = "[ fail] " . sprintf($fmt, @_);
-    chomp $msg;
+    chomp(my $msg = "[ fail] " . sprintf($fmt, @_));
     syslog("err", $msg) if $uw_config{syslog};
     undef $SIG{__DIE__};
     $msg = sprintf("[%5d] ", $$) . $msg;
@@ -133,7 +132,7 @@ sub fail ($@) {
 
 sub info ($@) {
     my $fmt = shift;
-    my $msg = "[ info] " . sprintf($fmt, @_);
+    chomp(my $msg = "[ info] " . sprintf($fmt, @_));
     syslog("notice", $msg) if $uw_config{syslog};
     printf("[%5d] %s\n", $$, $msg) if $uw_config{stdout};
 }
@@ -141,7 +140,7 @@ sub info ($@) {
 sub debug ($@) {
     return unless $uw_config{debug};
     my $fmt = shift;
-    my $msg = "[debug] " . sprintf($fmt, @_);
+    chomp(my $msg = "[debug] " . sprintf($fmt, @_));
     syslog("info", $msg) if $uw_config{syslog};
     printf("[%5d] %s\n", $$, $msg) if $uw_config{stdout};    
 }
@@ -394,13 +393,13 @@ sub ssl_listen ($) {
 
     my $sock;
     socket($sock, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
-        or fail("socket: $!");
+        or fail("ssl_listen socket: $!");
     setsockopt($sock, SOL_SOCKET, SO_REUSEADDR, 1)
-        or fail("setsockopt SOL_SOCKET, SO_REUSEADDR: $!");
+        or fail("ssl_listen setsockopt SOL_SOCKET, SO_REUSEADDR: $!");
     bind($sock, pack_sockaddr_in($port, INADDR_ANY))
-        or fail("bind ${port}: $!");
+        or fail("ssl_listen bind ${port}: $!");
     listen($sock, SOMAXCONN)
-        or fail("listen ${port}: $!");
+        or fail("ssl_listen listen ${port}: $!");
 
     ssl_sock_opts($sock);
 
@@ -423,7 +422,7 @@ sub ssl_accept ($;$) {
 
     my $paddr = accept(my $conn, $s_chan->{conn});
     unless ($paddr) {
-        debug("accept: $!");
+        debug("ssl_accept accept: $!");
         return;
     }
     my ($port, $iaddr) = sockaddr_in($paddr);
@@ -453,7 +452,7 @@ sub ssl_connect ($$;$) {
 
     my $conn;
     socket($conn, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
-        or fail("socket: $!");
+        or fail("ssl_connect socket connect: $!");
 
     my $ip = gethostbyname($server)
         or fail("$server: host not found");
