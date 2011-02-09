@@ -15,17 +15,146 @@ require "$Bin/userwatch.inc.pm";
 # http://rpm.vitki.net/pub/centos/5/i386/repoview/perl-User-Utmp.html
 #
 use User::Utmp qw(:constants :utmpx);
+use IO::Socket::UNIX;
 
 our ($config_file, $progname, %uw_config, $ev_loop, %ev_watch);
 my  (%chans, $srv_chan, @jobs, $finished);
 my  (%local_users, $passwd_modified_stamp);
+my  ($unix_seqno);
+
+my $ifconfig = "/sbin/ifconfig";
+
+#
+# Unix-domain sockets
+#
+
+sub unix_listen () {
+    my $path = $uw_config{unix_socket};
+    unlink($path);
+    my $sock = IO::Socket::UNIX->new(Type => SOCK_STREAM,
+                                    Local => $path, Listen => SOMAXCONN);
+    fail("unix sock: $!") unless $sock;
+    $sock->blocking(0) or fail("unix non-blocking: $!");
+    my $s_chan = {
+        type => 'accepting',
+        pending => 1,
+        ssl => undef,
+        conn => $sock,
+        addr => $path,
+        unix => 1,
+        path => $path
+        };
+    $chans{$s_chan} = $s_chan;
+    $ev_watch{u_accept} = $ev_loop->io($s_chan->{conn}, &EV::READ,
+                                    sub { unix_accept_pending($s_chan) });
+    debug("unix listen on $path");
+}
+
+sub unix_accept_pending () {
+    my ($s_chan) = @_;
+    my $conn = $s_chan->{conn}->accept();
+    unless ($conn) {
+        debug("unix accept: $!");
+        return;
+    }
+
+    my $addr = sprintf('unix_%04d', ++$unix_seqno);
+    my $c_chan = {
+        type => 'accepted',
+        pending => 0,
+        ssl => undef,
+        conn => $conn,
+        unix => 1,
+        addr => $addr
+        };
+
+    # start reading
+    $conn->blocking(0) or fail("unix client non-blocking: $!");
+    set_idle_timeout($c_chan, \&close_channel);
+    $c_chan->{r_buf} = "";
+    $c_chan->{r_watch} = $ev_loop->io($conn, &EV::READ,
+                                        sub { unix_read_pending($c_chan) });
+    debug('accepted unix %s', $c_chan->{addr});
+    return $c_chan;
+}
+
+sub unix_read_pending ($) {
+    my ($chan) = @_;
+
+    my $len = $chan->{conn}->sysread($chan->{r_buf}, 1024, length($chan->{r_buf}));
+    if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
+        debug("%s: will read later", $chan->{addr});
+        return;
+    }
+
+    if ($chan->{r_buf} !~ /\n/) {
+        if ($len) {
+            debug("%s: read %s bytes",
+                    $chan->{addr}, defined($len) ? $len : "?");
+            ssl_update_idle($chan);
+        } else {
+            info("%s: read failed: %s", $chan->{addr}, $!);
+            close_channel($chan);
+        }
+        return;
+    }
+
+    delete $chan->{r_watch};
+    chomp($chan->{r_buf});
+    debug("received from %s: \"%s\"", $chan->{addr}, $chan->{r_buf});
+
+    my $reply = handle_unix_request($chan->{r_buf});
+    $chan->{w_buf} = $reply . "\n";
+    $chan->{w_watch} = $ev_loop->io($chan->{conn}, &EV::WRITE,
+                                    sub { unix_write_pending($chan) });
+    debug("sending to %s: \"%s\"", $chan->{addr}, $reply);
+}
+
+sub unix_write_pending ($) {
+    my ($chan) = @_;
+
+    my $len = $chan->{conn}->syswrite($chan->{w_buf});
+    if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
+        debug("%s: will write later", $chan->{addr});
+        return;
+    }
+
+    unless ($len) {
+        info("%s: write failed: %s", $chan->{addr}, $!);
+        close_channel($chan);
+        return;
+    }
+
+    debug("%s: write %s bytes", $chan->{addr}, $len);
+    substr($chan->{w_buf}, 0, $len, "");
+    if (length($chan->{w_buf})) {
+        ssl_update_idle($chan);
+        return;
+    }
+
+    close_channel($chan);
+}
+
+sub unix_disconnect ($) {
+    my ($chan) = @_;
+    debug("close channel %s", $chan->{addr});
+    ssl_disconnect($chan);
+    if ($chan->{path}) {
+        unlink($chan->{path});
+        delete $chan->{path};
+    }
+}
+
+sub handle_unix_request ($) {
+    my ($req) = (@_);
+    return "OK($req)";
+}
 
 #
 # scan interfaces
 #
 sub get_ip_list () {
     my @ip_list;
-    my $ifconfig = "/sbin/ifconfig";
     $SIG{PIPE} = "IGNORE";
     my $pid = open(my $out, "$ifconfig 2>/dev/null |");
     fail("$ifconfig: executable not found") unless $pid;
@@ -188,6 +317,7 @@ sub main () {
                 )]);
     fail("$config_file: server host undefined")
         unless $uw_config{server};
+    fail("$ifconfig: executable not found") unless -x $ifconfig;
     log_init();
 
     ssl_startup();
@@ -199,6 +329,7 @@ sub main () {
         $ev_loop->loop_fork();
     }
 
+    unix_listen();
     reconnect(1);
     $ev_watch{update} = $ev_loop->timer(0, $uw_config{update_interval},
                                         \&update_active_users);
@@ -341,7 +472,11 @@ sub srv_reading_done ($$$) {
 
 sub close_channel ($) {
     my ($chan) = @_;
-    ssl_disconnect($chan);
+    if ($chan->{unix}) {
+        unix_disconnect($chan);
+    } else {
+        ssl_disconnect($chan);
+    }
     delete $chans{$chan};
     if ($srv_chan eq $chan) {
         undef $srv_chan;

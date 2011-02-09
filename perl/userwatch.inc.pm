@@ -51,6 +51,7 @@ our %uw_config = (
         also_local      => 0,
         update_interval => 120,
         connect_interval => 5,
+        unix_socket     => "/var/run/userwatch/$progname.sock",
         # server parameters
         mysql_host      => "localhost",
         mysql_port      => 3306,
