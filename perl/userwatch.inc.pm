@@ -44,8 +44,8 @@ our %uw_config = (
         stacktrace      => 0,
         syslog          => 1,
         stdout          => 0,
-        timeout         => 5,
         idle_timeout    => 240,
+        rw_timeout      => 10,
         # client parameters
         server          => undef,
         also_local      => 0,
@@ -66,6 +66,7 @@ our %uw_config = (
         ldap_user_base  => undef,
         ldap_attr_user  => 'uid',
         ldap_attr_uid   => 'uidNumber',
+        ldap_timeout    => 5,
         cache_retention => 300,
         user_retention  => 300,
         purge_interval  => 300,
@@ -419,7 +420,7 @@ sub ssl_listen ($) {
 # Accept another client connection
 #
 sub ssl_accept ($;$) {
-    my ($s_chan, $idle_handler) = @_;
+    my ($s_chan, $close_handler) = @_;
 
     my $paddr = accept(my $conn, $s_chan->{conn});
     unless ($paddr) {
@@ -441,7 +442,7 @@ sub ssl_accept ($;$) {
     Net::SSLeay::accept($c_chan->{ssl});
     ssl_check_die("SSL accept");
 
-    set_idle_timeout($c_chan, $idle_handler);
+    init_timeouts($c_chan, $close_handler);
     return $c_chan;
 }
 
@@ -449,7 +450,7 @@ sub ssl_accept ($;$) {
 # Connecting to server
 #
 sub ssl_connect ($$;$) {
-    my ($server, $port, $idle_handler) = @_;
+    my ($server, $port, $close_handler) = @_;
 
     my $conn;
     socket($conn, PF_INET, SOCK_STREAM, getprotobyname("tcp"))
@@ -482,7 +483,7 @@ sub ssl_connect ($$;$) {
         server => $server,
         port => $port,
         conn_params => $conn_params,
-        idle_handler => $idle_handler
+        close_handler => $close_handler
         };
 
     ssl_connected($chan, 1) if $ret;
@@ -510,7 +511,7 @@ sub ssl_connected ($;$) {
     Net::SSLeay::connect($chan->{ssl});
     ssl_check_die("SSL connect");
 
-    set_idle_timeout($chan, $chan->{idle_handler});
+    init_timeouts($chan, $chan->{close_handler});
     return "ok";
 }
 
@@ -518,31 +519,55 @@ sub ssl_connected ($;$) {
 # Idle timeout handling
 #
 
-sub set_idle_timeout ($$) {
-    my ($chan, $idle_handler) = @_;
+sub init_timeouts ($$) {
+    my ($chan, $close_handler) = @_;
 
-    if ($uw_config{idle_timeout} > 0 && $idle_handler) {
+    unless ($close_handler) {
+        delete $chan->{close_handler};
+        delete $chan->{idle_watch};
+        delete $chan->{rwt_watch};
+        return;
+    }
+    $chan->{close_handler} = $close_handler;
+
+    if ($uw_config{idle_timeout} > 0) {
         $chan->{idle_timeout} = $uw_config{idle_timeout};
-        $chan->{idle_handler} = $idle_handler;
         $chan->{idle_watch} = $ev_loop->timer(
-                                    $chan->{idle_timeout}, 0,
-                                    sub { _ssl_idle_handler($chan) });
+                                    $chan->{idle_timeout}, $chan->{idle_timeout},
+                                    sub { _idle_close_handler($chan) });
+    }
+
+    if ($uw_config{rw_timeout} > 0) {
+        $chan->{rw_timeout} = $uw_config{rw_timeout};
+        $chan->{rwt_watch} = $ev_loop->timer_ns(
+                                    $chan->{rw_timeout}, $chan->{rw_timeout},
+                                    sub { _idle_close_handler($chan) });
     }
 }
 
-sub ssl_update_idle ($) {
-    my ($chan) = @_;
-    if ($chan->{idle_watch}) {
-        $chan->{idle_watch}->set($chan->{idle_timeout}, 0);
-    }
+sub start_transmission ($$$) {
+    my ($chan, $io_mask, $io_handler) = @_;
+    $chan->{io_watch} = $ev_loop->io($chan->{conn}, $io_mask,
+                                    sub { &$io_handler($chan) });
+    $chan->{rwt_watch}->again() if $chan->{rwt_watch};
 }
 
-sub _ssl_idle_handler ($) {
+sub end_transmission ($) {
     my ($chan) = @_;
-    debug('idle disconnect of %s', $chan->{addr});
-    my $handler = $chan->{idle_handler};
-    &$handler($chan);
-    delete $chan->{idle_watch};
+    $chan->{rwt_watch}->stop()  if $chan->{rwt_watch};
+    delete $chan->{io_watch};
+}
+
+sub postpone_timeouts ($) {
+    my ($chan) = @_;
+    $chan->{idle_watch}->again() if $chan->{idle_watch};
+    $chan->{rwt_watch}->again() if $chan->{rwt_watch};
+}
+
+sub _idle_close_handler ($) {
+    my ($chan) = @_;
+    debug("%s: idle disconnect", $chan->{addr});
+    &{$chan->{close_handler}}($chan);
     ssl_disconnect($chan);
 }
 
@@ -552,6 +577,9 @@ sub _ssl_idle_handler ($) {
 
 sub ssl_disconnect ($) {
     my ($chan) = @_;
+
+    end_transmission($chan);
+    init_timeouts($chan, 0);
 
     # Paired with closing connection.
     if ($chan->{ssl}) {
@@ -564,8 +592,6 @@ sub ssl_disconnect ($) {
         close($chan->{conn});
         delete $chan->{conn}
     }
-    delete $chan->{r_watch};
-    delete $chan->{w_watch};
 }
 
 #
@@ -581,22 +607,18 @@ sub ssl_read_packet () {
     $chan->{r_what} = "r_head";
     $chan->{r_bytes} = 5;
     $chan->{r_first} = 1;
-    $chan->{r_watch} = $ev_loop->io($chan->{conn}, &EV::READ,
-                                    sub { _ssl_read_pending($chan) });
-    #debug('wait for data from %s: watch:%s', $chan->{addr}, $chan->{r_watch});
+    start_transmission($chan, &EV::READ, \&_ssl_read_pending);
 }
 
 sub _ssl_read_pending ($) {
     my ($chan) = @_;
-    #debug("reading triggered");
 
     #
     # reset wait mode to read/write after first byte.
     # ssl might need re-negotiation etc
     #
     if ($chan->{r_first}) {
-        #debug('switching to read/write: watch:%s', $chan->{r_watch});
-        $chan->{r_watch}->events(&EV::READ | &EV::WRITE);
+        $chan->{io_watch}->events(&EV::READ | &EV::WRITE);
         $chan->{r_first} = 0;
     }
 
@@ -629,36 +651,36 @@ sub _ssl_read_pending ($) {
 
     my $handler = $chan->{r_handler};
     unless (defined $buf) {
-        info('read failed: %s', $!);
-        delete $chan->{r_watch};
+        info("%s: read failed: %s", $chan->{addr}, $!);
+        end_transmission($chan);
         &$handler($chan, undef, $chan->{r_param});
         return;
     }
 
     $bytes = length($buf);
     unless ($bytes) {
-        debug("connection terminated");
-        delete $chan->{r_watch};
+        info("%s: read terminated: %s", $chan->{addr}, $!);
+        end_transmission($chan);
         &$handler($chan, undef, $chan->{r_param});
         return;
     }
 
     $chan->{$chan->{r_what}} .= $buf;
     $chan->{r_bytes} -= $bytes;
-    ssl_update_idle($chan);
+    postpone_timeouts($chan);
     return if $chan->{r_bytes} > 0;
 
     if ($chan->{r_what} eq "r_body") {
         my $body = $chan->{r_body};
         if ($body =~ /\n$/) {
             chomp $body;
-            debug("received: [$body]");
-            delete $chan->{r_watch};
+            debug("%s: received \"%s\"", $chan->{addr}, $body);
+            end_transmission($chan);
             &$handler($chan, $body, $chan->{r_param});
             return;
         }
-        debug("bad request body [$body]");
-        delete $chan->{r_watch};
+        info("%s: bad request body \"%s\"", $chan->{addr}, $body);
+        end_transmission($chan);
         &$handler($chan, undef, $chan->{r_param});
         return;
     }
@@ -667,7 +689,7 @@ sub _ssl_read_pending ($) {
     if ($chan->{r_head} =~ /^(\d{4}):$/) {
         $bytes = $1 - 5;
         if ($bytes > 0 && $bytes <= 8192) {
-            debug("request header: [%s]", $chan->{r_head});
+            debug("%s: request header \"%s\"", $chan->{addr}, $chan->{r_head});
             $chan->{r_what} = "r_body";
             $chan->{r_body} = "";
             $chan->{r_bytes} = $bytes;
@@ -675,8 +697,8 @@ sub _ssl_read_pending ($) {
         }
     }
 
-    debug("bad request header [%s]", $chan->{r_head});
-    delete $chan->{r_watch};
+    info("%s: bad request header \"%s\"", $chan->{addr}, $chan->{r_head});
+    end_transmission($chan);
     &$handler($chan, undef, $chan->{r_param});
     return;
 }
@@ -696,8 +718,7 @@ sub ssl_write_packet ($$$$) {
     $chan->{w_handler} = $handler;
     $chan->{w_param} = $param;
     $chan->{w_buf} = $head . $buf . "\n";
-    $chan->{w_watch} = $ev_loop->io($chan->{conn}, &EV::READ | &EV::WRITE,
-                                    sub { _ssl_write_pending($chan) });
+    start_transmission($chan, &EV::READ | &EV::WRITE, \&_ssl_write_pending);
 }
 
 sub _ssl_write_pending ($) {
@@ -715,20 +736,20 @@ sub _ssl_write_pending ($) {
 
     my $handler = $chan->{w_handler};
     unless ($bytes) {
-        info('write failed:%s', $!);
-        delete $chan->{w_watch};
+        info("%s: write failed: %s", $chan->{addr}, $!);
+        end_transmission($chan);
         &$handler($chan, 0, $chan->{w_param});
         return;
     }
 
-    ssl_update_idle($chan);
+    postpone_timeouts($chan);
     return if $bytes < 0;
 
     substr($chan->{w_buf}, 0, $bytes, "");
     $total -= $bytes;
     return if $total > 0;
 
-    delete $chan->{w_watch};
+    end_transmission($chan);
     &$handler($chan, 1, $chan->{w_param});
     return;
 }

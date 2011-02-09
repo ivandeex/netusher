@@ -70,10 +70,9 @@ sub unix_accept_pending () {
 
     # start reading
     $conn->blocking(0) or fail("unix client non-blocking: $!");
-    set_idle_timeout($c_chan, \&close_channel);
+    init_timeouts($c_chan, \&close_channel);
     $c_chan->{r_buf} = "";
-    $c_chan->{r_watch} = $ev_loop->io($conn, &EV::READ,
-                                        sub { unix_read_pending($c_chan) });
+    start_transmission($c_chan, &EV::READ, \&unix_read_pending);
     debug('accepted unix %s', $c_chan->{addr});
     return $c_chan;
 }
@@ -91,7 +90,7 @@ sub unix_read_pending ($) {
         if ($len) {
             debug("%s: read %s bytes",
                     $chan->{addr}, defined($len) ? $len : "?");
-            ssl_update_idle($chan);
+            postpone_timeouts($chan);
         } else {
             info("%s: read failed: %s", $chan->{addr}, $!);
             close_channel($chan);
@@ -99,14 +98,13 @@ sub unix_read_pending ($) {
         return;
     }
 
-    delete $chan->{r_watch};
+    end_transmission($chan);
     chomp($chan->{r_buf});
     debug("received from %s: \"%s\"", $chan->{addr}, $chan->{r_buf});
 
     my $reply = handle_unix_request($chan->{r_buf});
     $chan->{w_buf} = $reply . "\n";
-    $chan->{w_watch} = $ev_loop->io($chan->{conn}, &EV::WRITE,
-                                    sub { unix_write_pending($chan) });
+    start_transmission($chan, &EV::WRITE, \&unix_write_pending);
     debug("sending to %s: \"%s\"", $chan->{addr}, $reply);
 }
 
@@ -119,16 +117,16 @@ sub unix_write_pending ($) {
         return;
     }
 
+    debug("%s: write %s bytes", $chan->{addr}, defined($len) ? $len : "?");
     unless ($len) {
         info("%s: write failed: %s", $chan->{addr}, $!);
         close_channel($chan);
         return;
     }
 
-    debug("%s: write %s bytes", $chan->{addr}, $len);
     substr($chan->{w_buf}, 0, $len, "");
     if (length($chan->{w_buf})) {
-        ssl_update_idle($chan);
+        postpone_timeouts($chan);
         return;
     }
 
@@ -311,9 +309,9 @@ sub main () {
                     server
                 )],
                 [ qw(
-                    port ca_cert peer_pem update_interval also_local
-                    connect_interval idle_timeout timeout
-                    syslog stdout debug stacktrace daemonize
+                    port ca_cert peer_pem idle_timeout rw_timeout
+                    also_local syslog stdout debug stacktrace daemonize
+                    connect_interval update_interval
                 )]);
     fail("$config_file: server host undefined")
         unless $uw_config{server};

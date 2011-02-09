@@ -62,7 +62,7 @@ sub ldap_connect ($$$$) {
     my ($bind_dn, $user, $pass, $just_check) = @_;
 
     my $conn = Net::LDAP->new($uw_config{ldap_uri},
-                                timeout => $uw_config{timeout},
+                                timeout => $uw_config{ldap_timeout},
                                 version => 3)
         or return "ldap server down";
 
@@ -428,11 +428,10 @@ sub main () {
                     ldap_uri ldap_bind_dn ldap_bind_pass ldap_user_base
                 )],
                 [ qw(
-                    port ca_cert peer_pem mysql_port
-                    ldap_attr_user ldap_attr_uid ldap_start_tls
-                    user_retention purge_interval also_local
-                    cache_retention idle_timeout timeout
-                    syslog stdout debug stacktrace daemonize
+                    port ca_cert peer_pem idle_timeout rw_timeout
+                    also_local syslog stdout debug stacktrace daemonize
+                    ldap_attr_user ldap_attr_uid ldap_start_tls ldap_timeout
+                    cache_retention user_retention purge_interval mysql_port
                 )]);
     log_init();
 
