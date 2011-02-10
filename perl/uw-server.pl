@@ -18,6 +18,7 @@ use EV;
 
 our ($config_file, $progname, %uw_config);
 our ($ev_loop, %ev_watch);
+our ($ldap_child);
 
 my  ($dbh, %sth_cache);
 my  ($vpn_regex);
@@ -46,7 +47,7 @@ sub parse_req ($) {
     # C:1296872500:::::~:002:192.168.203.4:10.30.4.1:~:002:1296600643:XDM:root:0:/:1296856317:XTY:root:0:/:~
 
     my @arr = split /:/, $str;
-    debug("arr: %s", join(',', map { "$_=$arr[$_]" } (0 .. $#arr)));
+    #debug("arr: %s", join(',', map { "$_=$arr[$_]" } (0 .. $#arr)));
     return "invalid array delimiters"
         if $arr[6] ne '~' || $arr[$#arr] ne "~" || $arr[$arr[7] + 8] ne "~";
 
@@ -399,13 +400,15 @@ sub _ssl_write_done ($$$) {
     }
 }
 
-sub cleanup (;$) {
-    my ($supplementary) = @_;
+sub cleanup () {
     ev_close_all();
     ssl_destroy_context();
-    mysql_close();
     ldap_close();
-    end_daemon() unless $supplementary;
+    unless ($ldap_child) {
+        # disconnecting from mysql in a child process screws up parent
+        mysql_close();
+        end_daemon();
+    }
 }
 
 END { cleanup(); }

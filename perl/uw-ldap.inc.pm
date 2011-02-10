@@ -14,54 +14,52 @@ require "$Bin/uw-common.inc.pm";
 #
 use Net::LDAP;
 
-our (%uw_config, $in_parent);
+our (%uw_config);
 
 my $ldap_maxtries = 2;
 
-my  (%uid_cache);
-my  ($ldap_fork, $ldap_remote, $ldap_pid, $ldap_pipe_req, $ldap_pipe_reply);
-my  ($ldap_conn);
+our ($ldap_parent, $ldap_child);
+my  ($ldap_pid, $ldap_pipe_req, $ldap_pipe_reply);
+my  ($ldap_conn, %uid_cache);
 
 #
 # initialize ldap subsystem
 #
 sub ldap_init (;$) {
     my ($just_test) = @_;
-
     ldap_close();
-    $ldap_remote = 0;
-    # flush ldap cache at every re-connection
-    %uid_cache = ();
 
     #
     # Due to a bug in Net::SSLeay SSL in OpenLDAP
     # badly affects main SSL exchange.
     # Workaround: fork a subprocess for LDAP.
     #
-    $ldap_fork = ($uw_config{ldap_uri} =~ /^ldaps:/);
-    $ldap_fork = 1 if $uw_config{ldap_force_fork};
-    $ldap_fork = 0 if $just_test;
+    my $need_fork = ($uw_config{ldap_uri} =~ m/^ldaps:/);
+    $need_fork = 1 if $uw_config{ldap_force_fork};
+    $need_fork = 0 if $just_test;
 
-    if ($ldap_fork) {
+    if ($need_fork) {
         $SIG{PIPE} = "IGNORE";
         $| = 1;
         debug("forking off ldap child");
+
         pipe(my ($pipe_req_r, $pipe_req_w)) or fail("pipe: $!");
         $pipe_req_w->autoflush(1);
-        debug("pipe_req=($pipe_req_r,$pipe_req_w)");
+
         pipe(my ($pipe_reply_r, $pipe_reply_w)) or fail("pipe: $!");
         $pipe_reply_w->autoflush(1);
-        debug("pipe_reply=($pipe_reply_r,$pipe_reply_w)");
+
         defined($ldap_pid = fork()) or fail("can't fork: $!");
+
         if ($ldap_pid) {
             # in the parent
-            $ldap_remote = 1;
+            $ldap_parent = 1;
+
             $ldap_pipe_req = $pipe_req_w;
             close $pipe_req_r;
             $ldap_pipe_reply = $pipe_reply_r;
             close $pipe_reply_w;
-            # FIXME: check for errors
-            debug("ldap parent pipes:($ldap_pipe_req,$ldap_pipe_reply)");
+
             debug("wait for status from ldap child");
             print $ldap_pipe_req "PING\n";
             chomp(my $reply = <$ldap_pipe_reply>);
@@ -69,25 +67,25 @@ sub ldap_init (;$) {
             return;
         } else {
             # in the child
-            $in_parent = 1; # avoid additional forking
-            $ldap_remote = 0;
+            debug("ldap child starting");
+            $ldap_child = 1;
+
             $ldap_pipe_req = $pipe_req_r;
             close $pipe_req_w;
             $ldap_pipe_reply = $pipe_reply_w;
             close $pipe_reply_r;
-            detach_stdio();
-            cleanup(1); # close mysql connection et al
-            debug("ldap child pipes:($ldap_pipe_req,$ldap_pipe_reply)");
-            debug("ldap child started");
-            print $ldap_pipe_reply "OK\n";
+
+            # close ssl connections
+            cleanup();
+            detach_stdio() if $uw_config{daemonize};
         }
     }
 
     my $msg = _ldap_init($just_test);
 
-    if ($ldap_fork && !$ldap_remote) {
+    if ($ldap_child) {
         _ldap_child_loop();
-        exit(0);
+        fail("should not reach here");
     }
 
     return $msg;
@@ -97,17 +95,20 @@ sub ldap_init (;$) {
 # stop ldap subsystem
 #
 sub ldap_close () {
-    if ($ldap_fork && $ldap_remote) {
+    _ldap_cache_flush();
+
+    if ($ldap_parent) {
         print $ldap_pipe_req "QUIT\n";
         waitpid $ldap_pid, 0;
         debug("ldap child terminated");
         close $ldap_pipe_req;
         close $ldap_pipe_reply;
-        $ldap_fork = $ldap_remote = $ldap_pid = 0;
+        $ldap_parent = $ldap_child = $ldap_pid = 0;
         undef $ldap_pipe_req;
         undef $ldap_pipe_reply;
         return;
     }
+
     # in ldap child or in a single process
     if (defined $ldap_conn) {
         eval { $ldap_conn->unbind() };
@@ -115,18 +116,23 @@ sub ldap_close () {
     }
 }
 
+sub _ldap_cache_flush () {
+    %uid_cache = ();
+}
+
 #
 # verify ldap credentials
 #
 sub ldap_auth ($$) {
     my ($user, $pass) = @_;
-    if ($ldap_remote) {
+    if ($ldap_parent) {
         print $ldap_pipe_req "AUTH $user $pass\n";
         chomp(my $reply = <$ldap_pipe_reply>);
         return $reply;
-    } else {
-        return _ldap_connect(undef, $user, $pass, 1);
     }
+    # child or main process
+    my ($msg, $conn) = _ldap_connect(undef, $user, $pass, 1);
+    return $msg;
 }
 
 #
@@ -164,7 +170,7 @@ sub _ldap_get_uid ($) {
     my ($user) = @_;
     my ($uid, $msg);
     my $uid_attr = $uw_config{ldap_attr_user};
-    if ($ldap_remote) {
+    if ($ldap_parent) {
         print $ldap_pipe_req "UID $user\n";
         chomp(my $reply = <$ldap_pipe_reply>);
         ($uid, $msg) = ($1, $2) if $reply =~ /^(\S+) (.*)$/;
@@ -214,6 +220,9 @@ sub _ldap_child_loop () {
 #
 sub _ldap_init (;$) {
     my ($just_test) = @_;
+
+    _ldap_cache_flush();
+
     my ($msg, $conn) = _ldap_connect($uw_config{ldap_bind_dn},
                                     undef, $uw_config{ldap_bind_pass},
                                     $just_test);
