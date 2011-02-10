@@ -142,8 +142,7 @@ sub handle_req ($) {
         }
 
         # verify user password
-        my ($msg, $dummy_conn) = ldap_connect(undef, $log_usr->{user},
-                                                $log_usr->{pass}, 1);
+        my ($msg, $dummy_conn) = ldap_auth($log_usr->{user}, $log_usr->{pass});
         return $msg if $msg;
 
         # add this user to the beginning of the big list
@@ -318,6 +317,7 @@ sub main () {
                     port ca_cert peer_pem idle_timeout rw_timeout
                     also_local syslog stdout debug stacktrace daemonize
                     ldap_attr_user ldap_attr_uid ldap_start_tls ldap_timeout
+                    ldap_force_fork
                     cache_retention user_retention purge_interval mysql_port
                 )]);
     log_init();
@@ -331,8 +331,7 @@ sub main () {
     $vpn_regex =~ s/\./\\./g;
     $vpn_regex = qr[$vpn_regex];
 
-    my $msg = ldap_init();
-    info("warning: ldap init failed: $msg") if $msg;
+    ldap_init(1);
     mysql_connect();
 
     ssl_startup();
@@ -344,6 +343,7 @@ sub main () {
         mysql_clone();
         $ev_loop->loop_fork();
     }
+    ldap_init();
 
     my $s_chan = ssl_listen($uw_config{port});
     ev_add_chan($s_chan, 's_acccept', &EV::READ, \&ssl_accept_pending);
@@ -399,12 +399,13 @@ sub _ssl_write_done ($$$) {
     }
 }
 
-sub cleanup () {
+sub cleanup (;$) {
+    my ($supplementary) = @_;
     ev_close_all();
     ssl_destroy_context();
     mysql_close();
     ldap_close();
-    end_daemon();
+    end_daemon() unless $supplementary;
 }
 
 END { cleanup(); }

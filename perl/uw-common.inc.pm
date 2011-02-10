@@ -56,6 +56,7 @@ our %uw_config = (
         ldap_bind_dn    => undef,
         ldap_bind_pass  => undef,
         ldap_start_tls  => 0,
+        ldap_force_fork => 0,
         ldap_user_base  => undef,
         ldap_attr_user  => 'uid',
         ldap_attr_uid   => 'uidNumber',
@@ -165,13 +166,10 @@ sub daemonize () {
         exit(0);
     }
 
+    detach_stdio();
     chdir('/')                 or fail("can't chdir to /: $!");
-    open(STDIN,  '</dev/null') or fail("can't read /dev/null: $!");
-    open(STDOUT, '>/dev/null') or fail("can't write to /dev/null: $!");
-    open(STDERR, '>/dev/null') or fail("can't write to /dev/null: $!");
     setsid()                   or fail("can't start a new session: $!");
     umask(022);
-    $uw_config{stdout} = 0;
 
     $| = 1;
     if (open(my $pf, "> $pid_file")) {
@@ -182,6 +180,13 @@ sub daemonize () {
 
     debug("daemonized");
     return $$;
+}
+
+sub detach_stdio () {
+    open(STDIN,  '</dev/null') or fail("can't read /dev/null: $!");
+    open(STDOUT, '>/dev/null') or fail("can't write to /dev/null: $!");
+    open(STDERR, '>/dev/null') or fail("can't write to /dev/null: $!");
+    $uw_config{stdout} = 0;
 }
 
 sub end_daemon () {
