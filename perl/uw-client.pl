@@ -104,8 +104,12 @@ sub _unix_read_pending ($) {
     end_transmission($chan);
     chomp($chan->{r_buf});
     debug("received from %s: \"%s\"", $chan->{addr}, $chan->{r_buf});
+    my $reply = handle_unix_request($chan, $chan->{r_buf});
+    unix_write_reply($chan, $reply) if defined $reply;
+}
 
-    my $reply = handle_unix_request($chan->{r_buf});
+sub unix_write_reply ($$) {
+    my ($chan, $reply) = @_;
     $chan->{w_buf} = $reply . "\n";
     init_transmission($chan, &EV::WRITE, \&_unix_write_pending);
     fire_transmission($chan);
@@ -147,9 +151,25 @@ sub unix_disconnect ($) {
     }
 }
 
-sub handle_unix_request ($) {
-    my ($req) = (@_);
-    return "OK($req)";
+sub handle_unix_request ($$) {
+    my ($chan, $req) = (@_);
+    my (@arg) = split(/\s+/, $req);
+    my $cmd = $arg[0];
+    if ($cmd eq "echo") {
+        $req =~ s/^\s*\w+\s+//;
+        return $req;
+    } elsif ($cmd eq "login") {
+        return "usage: login XDM|RSH|CON user pass" if $#arg != 3;
+        user_login($arg[1], $arg[2], $arg[3], undef, $chan);
+    } elsif ($cmd eq "logout") {
+        return "usage: logout XDM|RSH|CON user" if $#arg != 2;
+        user_logout($arg[1], $arg[2], $chan);
+    } elsif ($cmd eq "update") {
+        update_active_users($chan);
+    } else {
+        return "usage: login|logout|update|echo [args...]";
+    }
+    return;
 }
 
 #
@@ -276,15 +296,16 @@ sub create_request ($$;$) {
 # typical operations
 #
 
-sub update_active_users () {
+sub update_active_users ($) {
+    my ($waiter) = @_;
     debug("update active users");
     return unless $srv_chan;
     my $req = create_request("C", 1);
-    queue_job($req, undef);
+    queue_job($req, $waiter);
 }
 
-sub user_login ($$$;$) {
-    my ($method, $user, $pass, $uid) = @_;
+sub user_login ($$$$$) {
+    my ($method, $user, $pass, $uid, $waiter) = @_;
     get_local_users();
     if (!$uw_config{also_local} && exists($local_users{$user})) {
         debug("$user: is local user");
@@ -293,15 +314,15 @@ sub user_login ($$$;$) {
     my $req = create_request("I", 0, {
                 method => $method, user => $user, pass => $pass, uid => $uid
                 });
-    queue_job($req, undef);
+    queue_job($req, $waiter);
 }
 
-sub user_logout ($$) {
-    my ($method, $user) = @_;
+sub user_logout ($$$) {
+    my ($method, $user, $waiter) = @_;
     my $req = create_request("O", 0, {
                 method => $method, user => $user, uid => 0
                 });
-    queue_job($req, undef);
+    queue_job($req, $waiter);
 }
 
 #
@@ -334,7 +355,7 @@ sub main () {
     unix_listen();
     reconnect(1);
     $ev_watch{update} = $ev_loop->timer(0, $uw_config{update_interval},
-                                        \&update_active_users);
+                                        sub { update_active_users(undef) });
 
     info("$progname started");
     $ev_loop->loop();
@@ -469,7 +490,11 @@ sub _srv_read_done ($$$) {
         return;        
     }
 
-    debug('received reply %s', $reply);
+    debug("received reply \"%s\"", $reply);
+    if ($job->{waiter}) {
+        unix_write_reply($job->{waiter}, $reply);
+    }
+
     handle_next_job();
 }
 
