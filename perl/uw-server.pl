@@ -360,7 +360,7 @@ sub main () {
 sub ssl_accept_pending ($) {
     my ($s_chan) = @_;
     my $c_chan = ssl_accept($s_chan, \&ev_close);
-    next unless $c_chan;
+    return unless $c_chan;
     ev_add_chan($c_chan);
     debug("%s: client accepted", $c_chan->{addr});
     ssl_read_packet($c_chan, \&_ssl_read_done, 0);
