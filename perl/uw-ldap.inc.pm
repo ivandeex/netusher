@@ -39,55 +39,11 @@ sub ldap_init (;$) {
     $need_fork = 0 if $just_test;
 
     if ($need_fork) {
-        $SIG{PIPE} = "IGNORE";
-        $| = 1;
-        debug("forking off ldap child");
-
-        pipe(my ($pipe_req_r, $pipe_req_w)) or fail("pipe: $!");
-        $pipe_req_w->autoflush(1);
-
-        pipe(my ($pipe_reply_r, $pipe_reply_w)) or fail("pipe: $!");
-        $pipe_reply_w->autoflush(1);
-
-        defined($ldap_pid = fork()) or fail("can't fork: $!");
-
-        if ($ldap_pid) {
-            # in the parent
-            $ldap_parent = 1;
-
-            $ldap_pipe_req = $pipe_req_w;
-            close $pipe_req_r;
-            $ldap_pipe_reply = $pipe_reply_r;
-            close $pipe_reply_w;
-
-            debug("wait for status from ldap child");
-            print $ldap_pipe_req "PING\n";
-            chomp(my $reply = <$ldap_pipe_reply>);
-            debug("status from ldap child: $reply");
-            return;
-        } else {
-            # in the child
-            debug("ldap child starting");
-            $ldap_child = 1;
-
-            $ldap_pipe_req = $pipe_req_r;
-            close $pipe_req_w;
-            $ldap_pipe_reply = $pipe_reply_w;
-            close $pipe_reply_r;
-
-            # close ssl connections
-            cleanup();
-            detach_stdio() if $uw_config{daemonize};
-        }
+        _ldap_child_start();
+        # will not return in child
     }
 
     my $msg = _ldap_init($just_test);
-
-    if ($ldap_child) {
-        _ldap_child_loop();
-        fail("should not reach here");
-    }
-
     return $msg;
 }
 
@@ -98,14 +54,7 @@ sub ldap_close () {
     _ldap_cache_flush();
 
     if ($ldap_parent) {
-        print $ldap_pipe_req "QUIT\n";
-        waitpid $ldap_pid, 0;
-        debug("ldap child terminated");
-        close $ldap_pipe_req;
-        close $ldap_pipe_reply;
-        $ldap_parent = $ldap_child = $ldap_pid = 0;
-        undef $ldap_pipe_req;
-        undef $ldap_pipe_reply;
+        _ldap_child_stop();
         return;
     }
 
@@ -184,7 +133,7 @@ sub _ldap_get_uid ($) {
 }
 
 #
-# forked ldap process
+# main child loop
 #
 sub _ldap_child_loop () {
     # child lives in the loop
@@ -198,9 +147,7 @@ sub _ldap_child_loop () {
             next;
         }
         if ($cmd[0] eq "QUIT") {
-            debug("quitting ldap child");
-            ldap_close();
-            exit(0);
+            last;
         }
         if ($cmd[0] eq "UID") {
             my ($uid, $msg) = _ldap_get_uid($cmd[1]);
@@ -213,6 +160,75 @@ sub _ldap_child_loop () {
             next;
         }
     }
+}
+
+#
+# child process management
+#
+
+sub _ldap_child_start () {
+    $SIG{PIPE} = "IGNORE";
+    $| = 1;
+    debug("forking off ldap child");
+
+    pipe(my ($pipe_req_r, $pipe_req_w)) or fail("pipe: $!");
+    $pipe_req_w->autoflush(1);
+
+    pipe(my ($pipe_reply_r, $pipe_reply_w)) or fail("pipe: $!");
+    $pipe_reply_w->autoflush(1);
+
+    defined($ldap_pid = fork()) or fail("can't fork: $!");
+
+    if ($ldap_pid) {
+        # in the parent
+        $ldap_parent = 1;
+
+        $ldap_pipe_req = $pipe_req_w;
+        close $pipe_req_r;
+        $ldap_pipe_reply = $pipe_reply_r;
+        close $pipe_reply_w;
+
+        debug("wait for status from ldap child");
+        print $ldap_pipe_req "PING\n";
+        chomp(my $reply = <$ldap_pipe_reply>);
+        debug("status from ldap child: $reply");
+        return;
+    }
+    
+    # in the child
+    debug("ldap child starting");
+    $ldap_child = 1;
+
+    $ldap_pipe_req = $pipe_req_r;
+    close $pipe_req_w;
+    $ldap_pipe_reply = $pipe_reply_w;
+    close $pipe_reply_r;
+
+    # close ssl connections
+    cleanup();
+    detach_stdio() if $uw_config{daemonize};
+
+    _ldap_init();
+    _ldap_child_loop();
+    debug("quitting ldap child");
+    ldap_close();
+    exit(0);
+}
+
+sub _ldap_child_stop ($) {
+    my ($force) = @_;
+
+    print $ldap_pipe_req "QUIT\n";
+    waitpid $ldap_pid, 0;
+    debug("ldap child terminated");
+
+    close $ldap_pipe_req;
+    undef $ldap_pipe_req;
+    close $ldap_pipe_reply;
+    undef $ldap_pipe_reply;
+
+    $ldap_parent = $ldap_child = 0;
+    undef $ldap_pid;
 }
 
 #
