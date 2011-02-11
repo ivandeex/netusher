@@ -20,7 +20,7 @@ use IO::Socket::UNIX;
 
 our ($config_file, $progname, %uw_config);
 our ($ev_loop, %ev_watch);
-my  ($srv_chan, @jobs, $finished);
+my  ($srv_chan, @jobs, $finished, $reconnecting);
 my  (%local_users, $passwd_modified_stamp);
 my  ($unix_seqno);
 
@@ -299,15 +299,15 @@ sub create_request ($$;$) {
 #
 
 sub update_active_users ($) {
-    my ($waiter) = @_;
+    my ($chan) = @_;
     debug("update active users");
     return unless $srv_chan;
     my $req = create_request("C", 1);
-    queue_job($req, $waiter);
+    queue_job($req, $chan);
 }
 
 sub user_login ($$$$$) {
-    my ($method, $user, $pass, $uid, $waiter) = @_;
+    my ($method, $user, $pass, $uid, $chan) = @_;
     get_local_users();
     if (!$uw_config{also_local} && exists($local_users{$user})) {
         debug("$user: is local user");
@@ -316,15 +316,15 @@ sub user_login ($$$$$) {
     my $req = create_request("I", 0, {
                 method => $method, user => $user, pass => $pass, uid => $uid
                 });
-    queue_job($req, $waiter);
+    queue_job($req, $chan);
 }
 
 sub user_logout ($$$) {
-    my ($method, $user, $waiter) = @_;
+    my ($method, $user, $chan) = @_;
     my $req = create_request("O", 0, {
                 method => $method, user => $user, uid => 0
                 });
-    queue_job($req, $waiter);
+    queue_job($req, $chan);
 }
 
 #
@@ -369,23 +369,31 @@ sub main () {
 #
 
 sub queue_job ($$) {
-    my ($req, $waiter) = @_;
-    push @jobs, { req => $req, waiter => $waiter };
+    my ($req, $chan) = @_;
+    push @jobs, {
+        req => $req,
+        chan => $chan,
+        source => $chan ? $chan->{addr} : "none"
+        };
     handle_next_job();
 }
 
 sub handle_next_job () {
     unless (@jobs) {
-        debug("no jobs");
+        debug("next job: queue empty");
         return;
     }
     unless ($srv_chan) {
-        debug("handle next job: no connection");
+        debug("next job: no connection");
+        return;
+    }
+    if ($srv_chan->{io_watch}) {
+        debug("next job: another job running");
         return;
     }
 
     my $job = shift @jobs;
-    debug("sending job %s", $job->{req});
+    debug("sending job %s from %s", $job->{req}, $job->{source});
     ssl_write_packet($srv_chan, $job->{req}, \&_srv_write_done, $job);
 }
 
@@ -395,6 +403,7 @@ sub handle_next_job () {
 
 sub reconnect (;$) {
     my ($now) = @_;
+    $reconnecting = 1;
 
     # close previous server connection, if any
     if ($srv_chan) {
@@ -410,7 +419,9 @@ sub reconnect (;$) {
                             $now ? 0 : $uw_config{connect_interval},
                             $uw_config{connect_interval},
                             \&connect_attempt);
-    debug("reconnection started...");
+
+    $reconnecting = 0;
+    debug("reconnection started (now:$now)...");
 }
 
 sub connect_attempt () {
@@ -452,7 +463,7 @@ sub _srv_disconnect ($) {
     my ($chan) = @_;
     ssl_disconnect($chan);
     undef $srv_chan;
-    reconnect() unless $finished;
+    reconnect() if !$finished && !$reconnecting;
 }
 
 sub on_connect ($$) {
@@ -475,6 +486,7 @@ sub _srv_write_done ($$$) {
     my ($chan, $success, $job) = @_;
 
     unless ($success) {
+        debug("re-queue job from %s after failed write", $job->{source});
         unshift @jobs, $job;
         reconnect();
         return;
@@ -487,15 +499,14 @@ sub _srv_read_done ($$$) {
     my ($chan, $reply, $job) = @_;
 
     unless (defined $reply) {
+        debug("re-queue job from %s after failed read", $job->{source});
         unshift @jobs, $job;
         reconnect();
-        return;        
+        return;
     }
 
-    debug("received reply \"%s\"", $reply);
-    if ($job->{waiter}) {
-        unix_write_reply($job->{waiter}, $reply);
-    }
+    debug("received reply \"%s\" for %s", $reply, $job->{source});
+    unix_write_reply($job->{chan}, $reply) if $job->{chan};
 
     handle_next_job();
 }

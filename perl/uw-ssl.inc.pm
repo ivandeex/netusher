@@ -444,7 +444,7 @@ sub _ssl_read_pending ($) {
     if ($chan->{r_head} =~ /^(\d{4}):$/) {
         $bytes = $1 - 5;
         if ($bytes > 0 && $bytes <= 8192) {
-            debug("%s: request header \"%s\"", $chan->{addr}, $chan->{r_head});
+            #debug("%s: reply header \"%s\"", $chan->{addr}, $chan->{r_head});
             $chan->{r_what} = "r_body";
             $chan->{r_body} = "";
             $chan->{r_bytes} = $bytes;
