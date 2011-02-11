@@ -25,16 +25,21 @@ $progname =~ s!.*/!!g;
 $progname =~ s!\..*$!!g;
 
 our $config_root = '/etc/userwatch';
+our $status_root = '/var/run/userwatch';
 our $config_file = "$config_root/$progname.conf";
 
-our %uw_config = (
+our %uw_config =
+    (
         # constants
         ifconfig        => "/sbin/ifconfig",
+        iptables        => "/sbin/iptables",
+        iptables_save   => "/sbin/iptables-save",
+
         # common parameters
         port            => 7501,
         peer_pem        => "$config_root/$progname.pem",
         ca_cert         => "$config_root/ca.crt",
-        pid_file        => "/var/run/userwatch/$progname.pid",
+        pid_file        => "$status_root/$progname.pid",
         daemonize       => 1,
         debug           => 0,
         stacktrace      => 0,
@@ -42,13 +47,15 @@ our %uw_config = (
         stdout          => 0,
         idle_timeout    => 240,
         rw_timeout      => 10,
+
         # client parameters
         server          => undef,
         also_local      => 0,
         update_interval => 120,
         connect_interval => 5,
-        unix_socket     => "/var/run/userwatch/$progname.sock",
+        unix_socket     => "$status_root/$progname.sock",
         auth_cache_ttl  => 0,
+
         # server parameters
         mysql_host      => "localhost",
         mysql_port      => 3306,
@@ -68,6 +75,11 @@ our %uw_config = (
         uid_cache_ttl   => 0,
         user_retention  => 300,
         purge_interval  => 300,
+        iptables_vpn    => '',
+        iptables_real   => '',
+        iptables_status => "$status_root/$progname.iptables",
+
+        # end of parameters
     );
 
 sub read_config ($$$$) {
@@ -346,6 +358,29 @@ sub end_daemon () {
     return if $in_parent || $ev_reload;
     unlink($uw_config{pid_file}) if $pid_written;
     info("$progname finished");
+}
+
+sub run_prog ($;$) {
+    my ($cmd, $out_ref) = @_;
+    my $kid;
+    if ($out_ref && 0) {
+        $SIG{PIPE} = "IGNORE";
+        my $pid = open(my $stdout, "$cmd 2>&1 |")
+            or fail("$cmd: failed to run: $!");
+        my $rs = $/;
+        undef $/;
+        my $out = <$stdout>;
+        $$out_ref = $out;
+        undef $out;
+        $/ = $rs;
+        close($stdout);
+        $kid = waitpid($pid, 0);
+    } else {
+        system("$cmd >/dev/null 2>&1");
+        $kid = $?;
+    }
+    my $ret = ($kid & 127) ? -255 : ($kid >> 8);
+    return $ret;
 }
 
 ##############################################

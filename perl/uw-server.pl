@@ -36,11 +36,11 @@ our %cache_backend = (
 
 my %login_method_weight = (
     'XDM' => 5,
-    'RSH' => 4,
+    'RSH' => 6,
     'CON' => 2,
     'XTY' => 1,
     );
-my $min_login_weight = 5;
+my $min_login_weight = 6;
 
 #
 # parse request string.
@@ -176,10 +176,10 @@ sub mysql_connect () {
     $dbh->{mysql_auto_reconnect} = 1;
     $dbh->{AutoCommit} = 0;
     $dbh->do("SET NAMES 'utf8'");
-    %sth_cache = ();
 }
 
 sub mysql_close () {
+    %sth_cache = ();
     if (defined $dbh) {
         eval { $dbh->disconnect() };
         undef $dbh;
@@ -211,9 +211,19 @@ sub mysql_execute ($@) {
     return $sth;
 }
 
+sub mysql_fetch1 ($) {
+    my ($sth) = @_;
+    my @row = $sth->fetchrow_array();
+    return $row[0];
+}
+
 sub mysql_commit () {
     eval { $dbh->commit(); };
 }
+
+##############################################
+# user mapping
+#
 
 #
 # update user mapping in database
@@ -268,32 +278,48 @@ sub update_user_mapping ($$$) {
 
     if ($best && ($cmd eq 'I' || $cmd eq 'C')) {
         # if there were previous active users, end their sessions
-        mysql_execute("UPDATE uw_users
+        mysql_execute(
+            "UPDATE uw_users
             SET end_time = FROM_UNIXTIME(?), running = 0
             WHERE vpn_ip = ? AND running = 1 AND beg_time < FROM_UNIXTIME(?)",
             $best->{beg_time} - 1, $vpn_ip, $best->{beg_time}
             );
 
         # insert or update existing record
-        mysql_execute("INSERT INTO uw_users
+        mysql_execute(
+            "INSERT INTO uw_users
             (vpn_ip,username,beg_time,end_time,method,running)
             VALUES (?, ?, FROM_UNIXTIME(?), NOW(), ?, 1)
             ON DUPLICATE KEY UPDATE
             end_time = NOW(), running = 1",
             $vpn_ip, $best->{user}, $best->{beg_time}, $best->{method}
             );
-
-        mysql_commit();
     }
 
     # logout: update existing user record
     if ($best && $cmd eq 'O') {
-        mysql_execute("UPDATE uw_users SET end_time = NOW(), running = 0
+        mysql_execute(
+            "UPDATE uw_users SET end_time = NOW(), running = 0
             WHERE beg_time = FROM_UNIXTIME(?)
             AND username = ? AND vpn_ip = ?",
             $best->{beg_time}, $best->{user}, $vpn_ip);
-        mysql_commit();
     }
+
+    mysql_commit();
+    iptables_update($vpn_ip, users_from_ip($vpn_ip));
+}
+
+#
+# number of users logged from a given ip
+#
+sub users_from_ip ($) {
+    my ($vpn_ip) = @_;
+    my $sth = mysql_execute("SELECT COUNT(*) FROM uw_users
+                            WHERE running = 1 AND vpn_ip = ?",
+                            $vpn_ip);
+    my $count = mysql_fetch1($sth);
+    $count = 0 unless $count;
+    return $count;
 }
 
 sub purge_expired_users () {
@@ -311,9 +337,270 @@ sub login_weight ($) {
     return defined($weight) ? $weight : 0;
 }
 
+##############################################
+# iptables control
 #
+
+my ($chains_enable, %chains_ips, %chains_extra);
+my (%chains_vpn, %chains_real, %chains_all);
+my ($iptables_fail_num, $iptables_fail_log);
+
+sub iptables_update ($$) {
+    my ($vpn_ip, $active) = @_;
+    return unless $chains_enable;
+    my $changed;
+    if ($active) {
+        for my $chain (keys %chains_vpn) {
+            if (!$chains_ips{$chain}{$vpn_ip}) {
+                enable_ip($chain, $vpn_ip, 1, 0);
+                $changed = 1;
+            }
+        }
+    } else {
+        for my $chain (keys %chains_vpn) {
+            if ($chains_ips{$chain}{$vpn_ip}) {
+                enable_ip($chain, $vpn_ip, 0, 0);
+                $changed = 1;
+            }
+        }
+    }
+    if ($changed) {
+        iptables_save_status();
+        debug("iptables: %s vpn ip %s",
+                ($active ? "enable" : "disable"), $vpn_ip);
+    }
+}
+
+sub enable_ip ($$$$) {
+    my ($chain, $ip, $enable, $log) = @_;
+    my $flag = $enable ? "-I" : "-D";
+    if ($enable) {
+        $chains_ips{$chain}{$ip} = 1;
+    } else {
+        delete $chains_ips{$chain}{$ip};
+    }
+    return run_iptables("$flag $chain -s $ip", $log);
+}
+
+sub iptables_init () {
+    iptables_close();
+
+    # setup chain names
+    $chains_all{$_} = $chains_vpn{$_} = 1
+        for (split /\s+/, $uw_config{iptables_vpn});
+    $chains_all{$_} = $chains_real{$_} = 1
+        for (split /\s+/, $uw_config{iptables_real});
+    $chains_enable = (%chains_all ? 1 : 0);
+    return unless $chains_enable;
+
+    # consistency check
+    for my $chain (qw[PREROUTING INPUT FORWARD OUTPUT POSTROUTING]) {
+        fail("$chain: refusing to manage internal system chain")
+            if $chains_all{$chain};
+    }
+
+    # setup structures
+    my $iptables = $uw_config{iptables};
+    my (%chain_exists, %chains_extra_set);
+    for (keys %chains_all) {
+        $chains_ips{$_} = {};
+        $chains_extra{$_} = [];
+        $chains_extra_set{$_} = {};
+    }
+
+    # scan saved status and current state of iptables
+    for my $source ("status", "iptables") {
+        my $out;
+
+        # first scan saved status, then current state
+        if ($source eq "status") {
+            open(my $file, $uw_config{iptables_status}) or next;
+            my $rs = $/;
+            undef $/;
+            $out = <$file>;
+            $/ = $rs;
+            close($file);
+        }
+        elsif ($source eq "iptables") {
+            run_prog($uw_config{iptables_save}, \$out);
+        }
+
+        # scan current source line by line
+        for (split /\n/, $out) {
+            # skip empty lines and comments
+            chomp; s/\s+/ /g; s/^ //; s/ $//;
+            next if /^$/ || /^\#/;
+
+            # remove program name
+            if ($source eq "status") {
+                s/^${iptables}//;
+            }
+
+            # detect whether chains exist
+            if ($source eq "iptables" && /^:(\S+) \S/) {
+                $chain_exists{$1} = 1;
+                next;
+            }
+
+            # simple rules for ordinary IPs
+            if (/^-A (\S+) -s ([\w\d\.\:]+) -j ACCEPT$/) {
+                my ($chain, $ip) = ($1, $2);
+                my $is_vpn = ($ip =~ $vpn_regex) ? 1 : 0;
+                if ($chains_vpn{$chain} && $is_vpn) {
+                    $chains_ips{$chain}{$ip} = $source;
+                    next;
+                }
+                if ($chains_real{$chain} && !$is_vpn) {
+                    $chains_ips{$chain}{$ip} = $source;
+                    next;
+                }
+            }
+
+            # custom user rules
+            if (/^-A (\S+) (\S.*)$/) {
+                my ($chain, $rule) = ($1, $2);
+                next unless $chains_all{$chain};
+                next if $chains_extra_set{$chain}{$rule};
+                $chains_extra_set{$chain}{$rule} = $source;
+                push @{ $chains_extra{$chain} }, $rule;
+            }
+        }
+    }
+
+    # augment empty chains with default drop rule
+    for my $chain (keys %chains_all) {
+        unless (@{ $chains_extra{$chain} }) {
+            my $rule = "-j DROP";
+            push @{ $chains_extra{$chain} }, $rule;
+            $chains_extra_set{$chain}{$rule} = "auto";
+        }
+    }
+
+    # identify chains which have to be updated
+    my %need_update;
+  CHAIN_FOR_UPDATE:
+    for my $chain (keys %chains_all) {
+        if (!$chain_exists{$chain}) {
+            $need_update{$chain} = "create";
+            next CHAIN_FOR_UPDATE;
+        }
+        for my $src (values %{ $chains_extra_set{$chain} }) {
+            if ($src ne "iptables") {
+                $need_update{$chain} = "extra";
+                next CHAIN_FOR_UPDATE;
+            }
+        }
+        for my $src (values %{ $chains_ips{$chain} }) {
+            if ($src ne "iptables") {
+                $need_update{$chain} = "ip";
+                next CHAIN_FOR_UPDATE;
+            }
+        }
+    }
+
+    # test all changes with a temporary chain
+    $iptables_fail_num = 0;
+    $iptables_fail_log = "";
+    my $temp = "USERWATCH_TEMP";
+
+    for my $chain (sort keys %need_update) {
+        run_iptables("-F $temp", 0);
+        run_iptables("-X $temp", 0);
+        run_iptables("-N $temp", 1);
+        last if $iptables_fail_num;
+
+        for my $ip (sort keys %{ $chains_ips{$chain} }) {
+            run_iptables("-A $temp -s $ip -j ACCEPT", 1);
+            last if $iptables_fail_num;
+        }
+        for my $rule (@{ $chains_extra{$chain} }) {
+            run_iptables("-A $temp $rule", 1);
+            last if $iptables_fail_num;
+        }
+    }
+
+    # remove temporary chain and check the result
+    run_iptables("-F $temp", 0);
+    run_iptables("-X $temp", 0);
+    fail("iptables error:\n%s", $iptables_fail_log)
+        if $iptables_fail_num;
+
+    # since test is fine, repeat the actions with real chains
+    for my $chain (sort keys %need_update) {
+        run_iptables("-N $chain", 0) unless $chain_exists{$chain};
+        run_iptables("-F $chain", 0);
+
+        for my $ip (sort keys %{ $chains_ips{$chain} }) {
+            run_iptables("-A $chain -s $ip -j ACCEPT", 1);
+        }
+        for my $rule (@{ $chains_extra{$chain} }) {
+            run_iptables("-A $chain $rule", 1);
+        }
+    }
+
+    if ($iptables_fail_num) {
+        info("warning: iptables errors: %s", $iptables_fail_log);
+    } elsif (%need_update) {
+        info("iptables modified successfully");
+    }
+
+    create_parent_dir($uw_config{iptables_status});
+    iptables_save_status();
+}
+
+sub iptables_save_status () {
+    my $path = $uw_config{iptables_status};
+    my $iptables = $uw_config{iptables};
+
+    my $out = "# generated by $progname on " . POSIX::ctime(time);
+    for my $chain (sort keys %chains_all) {
+        $out .= "$iptables -F $chain\n";
+        for my $ip (sort keys %{ $chains_ips{$chain} }) {
+            $out .= "$iptables -A $chain -s $ip -j ACCEPT\n";
+        }
+        for my $rule (@{ $chains_extra{$chain} }) {
+            $out .= "$iptables -A $chain $rule\n";
+        }
+    }
+    $out .= "# end of file\n";
+
+    if (open(my $file, ">", $path)) {
+        print $file $out;
+        close($file);
+        debug("iptables status saved in $path");
+    } else {
+        info("$path: cannot create status file");
+    }
+}
+
+sub run_iptables ($$) {
+    my ($cmd, $log) = @_;
+    my $iptables = $uw_config{iptables};
+    my $out;
+    #debug("run $iptables $cmd ...");
+    my $ret = run_prog("$iptables $cmd", \$out);
+    if ($ret && $log) {
+        $iptables_fail_num++;
+        $iptables_fail_log .= $out;
+    }
+    return $ret;
+}
+
+sub iptables_close () {
+    $chains_enable = 0;
+    %chains_ips = ();
+    %chains_extra = ();
+    %chains_vpn = ();
+    %chains_real = ();
+    %chains_all = ();
+    $iptables_fail_num = 0;
+    $iptables_fail_log = "";
+}
+
+##############################################
 # main code
 #
+
 sub main_loop () {
     read_config($config_file,
                 # required parameters
@@ -328,12 +615,14 @@ sub main_loop () {
                     ldap_attr_user ldap_attr_uid ldap_start_tls ldap_timeout
                     ldap_force_fork mysql_port uid_cache_ttl
                     user_retention purge_interval
+                    iptables_vpn iptables_real iptables_status
                 )],
                 # required programs
                 [ qw(
                     iptables
                 )]);
     log_init();
+    iptables_init();
 
     # create regular expression for vpn network
     $vpn_regex = $uw_config{vpn_net};
