@@ -122,7 +122,7 @@ sub fail ($@) {
     if ($uw_config{stacktrace}) {
         confess($msg);
     } else {
-        die($msg);
+        die("$msg\n");
     }
 }
 
@@ -153,10 +153,7 @@ sub daemonize () {
     my $pid_file = $uw_config{pid_file};
     if ($pid_file) {
         fail("$pid_file: pid file already exists") if -e $pid_file;
-        (my $pid_dir = $pid_file) =~ s!/+[^/]*$!!;
-        mkdir($pid_dir);
-        (-d $pid_dir) or fail("$pid_dir: directory does not exist");
-        (-w $pid_dir) or fail("$pid_dir: directory is not writeable");
+        create_parent_dir($pid_file);
     }
 
     defined(my $pid = fork())  or fail("can't fork: $!");
@@ -187,6 +184,14 @@ sub detach_stdio () {
     open(STDOUT, '>/dev/null') or fail("can't write to /dev/null: $!");
     open(STDERR, '>/dev/null') or fail("can't write to /dev/null: $!");
     $uw_config{stdout} = 0;
+}
+
+sub create_parent_dir ($) {
+    my ($path) = @_;
+    (my $dir = $path) =~ s!/+[^/]*$!!;
+    mkdir($dir);
+    (-d $dir) or fail("$dir: directory does not exist");
+    (-w $dir) or fail("$dir: directory is not writable");
 }
 
 sub end_daemon () {

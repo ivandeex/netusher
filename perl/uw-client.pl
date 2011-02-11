@@ -32,10 +32,12 @@ my $ifconfig = "/sbin/ifconfig";
 
 sub unix_listen () {
     my $path = $uw_config{unix_socket};
+    create_parent_dir($path);
     unlink($path);
     my $sock = IO::Socket::UNIX->new(Type => SOCK_STREAM,
                                     Local => $path, Listen => SOMAXCONN);
     fail("unix sock: $!") unless $sock;
+    chmod(0666, $path);
     $sock->blocking(0) or fail("unix non-blocking: $!");
     my $s_chan = {
         type => 'accepting',
