@@ -28,6 +28,8 @@ our $config_root = '/etc/userwatch';
 our $config_file = "$config_root/$progname.conf";
 
 our %uw_config = (
+        # constants
+        ifconfig        => "/sbin/ifconfig",
         # common parameters
         port            => 7501,
         peer_pem        => "$config_root/$progname.pem",
@@ -68,8 +70,8 @@ our %uw_config = (
         purge_interval  => 300,
     );
 
-sub read_config ($$$) {
-    my ($config, $required, $optional) = @_;
+sub read_config ($$$$) {
+    my ($config, $required, $optional, $programs) = @_;
     my (%h_required, %h_allowed);
     $h_allowed{$_} = 1 for (@$required, @$optional);
     $h_required{$_} = 1 for (@$required);
@@ -98,6 +100,11 @@ sub read_config ($$$) {
     }
 
     $uw_config{stdout} = 1 unless $uw_config{syslog};
+
+    for my $prog (@$programs) {
+        my $path = $uw_config{$prog};
+        fail("$path: required program not found") unless -x $path;
+    }
 }
 
 ##############################################

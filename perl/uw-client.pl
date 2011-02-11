@@ -25,8 +25,6 @@ my  ($srv_chan, @jobs, $finished, $reconnecting);
 my  (%local_users, $passwd_modified_stamp);
 my  ($unix_seqno);
 
-my $ifconfig = "/sbin/ifconfig";
-
 our %cache_backend = (
         );
 
@@ -184,8 +182,8 @@ sub handle_unix_request ($$) {
 sub get_ip_list () {
     my @ip_list;
     $SIG{PIPE} = "IGNORE";
-    my $pid = open(my $out, "$ifconfig 2>/dev/null |");
-    fail("$ifconfig: executable not found") unless $pid;
+    my $pid = open(my $out, "$uw_config{ifconfig} 2>/dev/null |");
+    fail("$uw_config{ifconfig}: failed to run") unless $pid;
     while (<$out>) {
         next unless m"^\s+inet addr:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+\w";
         next if $1 eq "127.0.0.1";
@@ -355,17 +353,21 @@ sub handle_reply ($$$) {
 #
 
 sub main_loop () {
-    read_config($config_file, [ qw(
+    read_config($config_file,
+                # required parameters
+                [ qw(
                     server
                 )],
+                # optional parameters
                 [ qw(
                     port ca_cert peer_pem idle_timeout rw_timeout
                     also_local syslog stdout debug stacktrace daemonize
                     connect_interval update_interval auth_cache_ttl
+                )],
+                # required programs
+                [ qw(
+                    ifconfig
                 )]);
-    fail("$config_file: server host undefined")
-        unless $uw_config{server};
-    fail("$ifconfig: executable not found") unless -x $ifconfig;
     log_init();
 
     debug("setting up");

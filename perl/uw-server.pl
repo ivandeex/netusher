@@ -315,16 +315,23 @@ sub login_weight ($) {
 # main code
 #
 sub main_loop () {
-    read_config($config_file, [ qw(
+    read_config($config_file,
+                # required parameters
+                [ qw(
                     vpn_net mysql_host mysql_db mysql_user mysql_pass
                     ldap_uri ldap_bind_dn ldap_bind_pass ldap_user_base
                 )],
+                # optional parameters
                 [ qw(
                     port ca_cert peer_pem idle_timeout rw_timeout
                     also_local syslog stdout debug stacktrace daemonize
                     ldap_attr_user ldap_attr_uid ldap_start_tls ldap_timeout
                     ldap_force_fork mysql_port uid_cache_ttl
                     user_retention purge_interval
+                )],
+                # required programs
+                [ qw(
+                    iptables
                 )]);
     log_init();
 
