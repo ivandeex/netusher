@@ -8,6 +8,7 @@ use strict;
 use FindBin qw($Bin);
 require "$Bin/uw-common.inc.pm";
 require "$Bin/uw-ssl.inc.pm";
+require "$Bin/uw-cache.inc.pm";
 
 #
 # require: perl-User-Utmp
@@ -164,17 +165,17 @@ sub handle_unix_request ($$) {
         $req =~ s/^\s*\w+\s+//;
         return $req;
     } elsif ($cmd eq "login") {
-        return "usage: login XDM|RSH|CON user pass" if $#arg != 3;
-        user_login($arg[1], $arg[2], $arg[3], undef, $chan);
+        return $#arg != 3 ? "usage: login XDM|RSH|CON user pass"
+                    : user_login($arg[1], $arg[2], $arg[3], undef, $chan);
     } elsif ($cmd eq "logout") {
-        return "usage: logout XDM|RSH|CON user" if $#arg != 2;
-        user_logout($arg[1], $arg[2], $chan);
+        return $#arg != 2 ? "usage: logout XDM|RSH|CON user"
+                    : user_logout($arg[1], $arg[2], $chan);
     } elsif ($cmd eq "update") {
-        update_active_users($chan);
+        return $#arg != 0 ? "usage: update"
+                    : update_active_users($chan);
     } else {
         return "usage: login|logout|update|echo [args...]";
     }
-    return;
 }
 
 #
@@ -304,22 +305,24 @@ sub create_request ($$;$) {
 sub update_active_users ($) {
     my ($chan) = @_;
     debug("update active users");
-    return unless $srv_chan;
+    return "no connection" unless $srv_chan;
     my $req = create_request("C", 1);
     queue_job($req, $chan);
+    return;
 }
 
 sub user_login ($$$$$) {
     my ($method, $user, $pass, $uid, $chan) = @_;
     get_local_users();
     if (!$uw_config{also_local} && exists($local_users{$user})) {
-        debug("$user: is local user");
+        debug("$user: local user login");
         return "OK";
     }
     my $req = create_request("I", 0, {
                 method => $method, user => $user, pass => $pass, uid => $uid
                 });
-    queue_job($req, $chan);
+    queue_job($req, $chan, "$user: user login");
+    return;
 }
 
 sub user_logout ($$$) {
@@ -327,7 +330,8 @@ sub user_logout ($$$) {
     my $req = create_request("O", 0, {
                 method => $method, user => $user, uid => 0
                 });
-    queue_job($req, $chan);
+    queue_job($req, $chan, "$user: user logout");
+    return;
 }
 
 #
@@ -372,12 +376,13 @@ sub main_loop () {
 # job queue
 #
 
-sub queue_job ($$) {
-    my ($req, $chan) = @_;
+sub queue_job ($$;$) {
+    my ($req, $chan, $message) = @_;
     push @jobs, {
         req => $req,
         chan => $chan,
-        source => $chan ? $chan->{addr} : "none"
+        source => $chan ? $chan->{addr} : "none",
+        message => $message
         };
     handle_next_job();
 }
@@ -408,6 +413,7 @@ sub handle_next_job () {
 sub reconnect (;$) {
     my ($now) = @_;
     $reconnecting = 1;
+    cache_flush();
 
     # close previous server connection, if any
     if ($srv_chan) {
@@ -441,7 +447,7 @@ sub connect_attempt () {
         return;
     }
 
-    on_connect($chan, "at once");
+    on_connect($chan);
 }
 
 sub connect_pending ($) {
@@ -460,7 +466,7 @@ sub connect_pending ($) {
     }
 
     delete $ev_watch{wait_con};
-    on_connect($chan, "after wait");
+    on_connect($chan);
 }
 
 sub _srv_disconnect ($) {
@@ -470,10 +476,10 @@ sub _srv_disconnect ($) {
     reconnect() if !$finished && !$reconnecting;
 }
 
-sub on_connect ($$) {
-    my ($chan, $msg) = @_;
+sub on_connect ($) {
+    my ($chan) = @_;
 
-    debug("%s: successfully connected to server", $msg);
+    info("connected to server");
     $ev_watch{update}->set(0, $uw_config{update_interval});
 
     $chan->{destructor} = \&_srv_disconnect;
@@ -511,6 +517,7 @@ sub _srv_read_done ($$$) {
 
     debug("received reply \"%s\" for %s", $reply, $job->{source});
     unix_write_reply($job->{chan}, $reply) if $job->{chan};
+    info("%s: %s", $job->{message}, $reply) if $job->{message};
 
     handle_next_job();
 }

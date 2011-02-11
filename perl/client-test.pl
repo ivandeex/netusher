@@ -10,6 +10,6 @@ print $sock "$cmd";
 #sleep 10;
 print $sock "\n";
 chomp(my $line = <$sock>);
-print "result: \"$line\"\n";
+print "\"$line\"\n";
 close($sock);
 
