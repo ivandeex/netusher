@@ -280,11 +280,10 @@ sub _chan_timeout_handler ($$) {
 # Daemonization
 #
 
-my  ($in_parent, $pid_written);
+my  ($in_parent, $pid_written, $already_daemon);
 
 sub daemonize () {
-    return 0 if $ev_reload;
-    return 0 unless $uw_config{daemonize};
+    return 0 if !$uw_config{daemonize} || $already_daemon;
 
     my $pid_file = $uw_config{pid_file};
     if ($pid_file) {
@@ -312,6 +311,7 @@ sub daemonize () {
     $pid_written = 1;
 
     debug("daemonized");
+    $already_daemon = 1;
     return $$;
 }
 
