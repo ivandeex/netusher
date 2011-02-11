@@ -151,82 +151,23 @@ sub _fmtmsg ($) {
 }
 
 ##############################################
-# Daemonization
-#
-
-my  ($in_parent, $pid_written);
-
-sub daemonize () {
-    return 0 unless $uw_config{daemonize};
-
-    my $pid_file = $uw_config{pid_file};
-    if ($pid_file) {
-        fail("$pid_file: pid file already exists") if -e $pid_file;
-        create_parent_dir($pid_file);
-    }
-
-    defined(my $pid = fork())  or fail("can't fork: $!");
-    $in_parent = $pid;
-    if ($in_parent) {
-        debug("parent exits");
-        exit(0);
-    }
-
-    detach_stdio();
-    chdir('/')                 or fail("can't chdir to /: $!");
-    setsid()                   or fail("can't start a new session: $!");
-    umask(022);
-
-    $| = 1;
-    if (open(my $pf, "> $pid_file")) {
-        print $pf $$;
-        close $pf;
-    }
-    $pid_written = 1;
-
-    debug("daemonized");
-    return $$;
-}
-
-sub detach_stdio () {
-    open(STDIN,  '</dev/null') or fail("can't read /dev/null: $!");
-    open(STDOUT, '>/dev/null') or fail("can't write to /dev/null: $!");
-    open(STDERR, '>/dev/null') or fail("can't write to /dev/null: $!");
-    $uw_config{stdout} = 0;
-}
-
-sub create_parent_dir ($) {
-    my ($path) = @_;
-    (my $dir = $path) =~ s!/+[^/]*$!!;
-    mkdir($dir);
-    (-d $dir) or fail("$dir: directory does not exist");
-    (-w $dir) or fail("$dir: directory is not writable");
-}
-
-sub end_daemon () {
-    unless ($in_parent) {
-        unlink($uw_config{pid_file}) if $pid_written;
-        info("$progname finished");
-    }
-}
-
-##############################################
 # Event loop
 #
 
-our ($ev_loop, %ev_watch, %ev_chans);
+our ($ev_loop, %ev_watch, %ev_chans, $ev_reload);
 
 sub ev_create_loop () {
     $ev_loop = EV::default_loop();
-    $ev_watch{s_int} = $ev_loop->signal('INT', sub { ev_signaled('INT') });
-    $ev_watch{s_term} = $ev_loop->signal('TERM', sub { ev_signaled('TERM') });
-    $ev_watch{s_quit} = $ev_loop->signal('QUIT', sub { ev_signaled('QUIT') });
+    for my $sig ("INT", "TERM", "QUIT", "HUP") {
+        $ev_watch{"s_$sig"}  = $ev_loop->signal($sig,  sub { ev_signaled($sig) });
+    }
 }
 
 sub ev_signaled ($) {
     my ($signal) = @_;
     debug("catch $signal");
     $ev_loop->unloop();
+    $ev_reload++ if $signal eq "HUP";
 }
 
 sub ev_add_chan ($;$$$) {
@@ -333,6 +274,66 @@ sub _chan_timeout_handler ($$) {
     debug("%s: %s timeout disconnect", $chan->{addr}, $reason);
     &{$chan->{close_handler}}($chan);
     ssl_disconnect($chan);
+}
+
+##############################################
+# Daemonization
+#
+
+my  ($in_parent, $pid_written);
+
+sub daemonize () {
+    return 0 if $ev_reload;
+    return 0 unless $uw_config{daemonize};
+
+    my $pid_file = $uw_config{pid_file};
+    if ($pid_file) {
+        fail("$pid_file: pid file already exists") if -e $pid_file;
+        create_parent_dir($pid_file);
+    }
+
+    defined(my $pid = fork())  or fail("can't fork: $!");
+    $in_parent = $pid;
+    if ($in_parent) {
+        debug("parent exits");
+        exit(0);
+    }
+
+    detach_stdio();
+    chdir('/')                 or fail("can't chdir to /: $!");
+    setsid()                   or fail("can't start a new session: $!");
+    umask(022);
+
+    $| = 1;
+    if (open(my $pf, "> $pid_file")) {
+        print $pf $$;
+        close $pf;
+    }
+    $pid_written = 1;
+
+    debug("daemonized");
+    return $$;
+}
+
+sub detach_stdio () {
+    open(STDIN,  '</dev/null') or fail("can't read /dev/null: $!");
+    open(STDOUT, '>/dev/null') or fail("can't write to /dev/null: $!");
+    open(STDERR, '>/dev/null') or fail("can't write to /dev/null: $!");
+    $uw_config{stdout} = 0;
+}
+
+sub create_parent_dir ($) {
+    my ($path) = @_;
+    (my $dir = $path) =~ s!/+[^/]*$!!;
+    mkdir($dir);
+    (-d $dir) or fail("$dir: directory does not exist");
+    (-w $dir) or fail("$dir: directory is not writable");
+}
+
+sub end_daemon () {
+    return if $in_parent || $ev_reload;
+    unlink($uw_config{pid_file}) if $pid_written;
+    info("$progname finished");
 }
 
 ##############################################

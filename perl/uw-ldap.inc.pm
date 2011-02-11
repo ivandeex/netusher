@@ -36,6 +36,8 @@ sub ldap_init ($) {
         return "";
     }
 
+    ldap_close();
+
     #
     # Due to a bug in Net::SSLeay SSL in OpenLDAP
     # badly affects main SSL exchange.
@@ -49,11 +51,10 @@ sub ldap_init ($) {
         return "ssl";
     }
 
-    ldap_close();
-
     if ($need_fork) {
         _ldap_child_start();
         # will not return in child
+        return "";
     }
 
     return _ldap_init($first_init);
@@ -72,6 +73,7 @@ sub ldap_close () {
     # in ldap child or in a single process
     if (defined $ldap_conn) {
         eval { $ldap_conn->unbind() };
+        eval { $ldap_conn->disconnect() };
         undef $ldap_conn;
     }
 }
@@ -321,6 +323,7 @@ sub _ldap_init ($) {
 sub _ldap_connect ($$$$) {
     my ($bind_dn, $user, $pass, $just_check) = @_;
 
+    debug("connecting to ldap uri:%s", $uw_config{ldap_uri});
     my $conn = Net::LDAP->new($uw_config{ldap_uri},
                                 timeout => $uw_config{ldap_timeout},
                                 version => 3)

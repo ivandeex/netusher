@@ -19,7 +19,7 @@ use User::Utmp qw(:constants :utmpx);
 use IO::Socket::UNIX;
 
 our ($config_file, $progname, %uw_config);
-our ($ev_loop, %ev_watch);
+our ($ev_loop, %ev_watch, $ev_reload);
 my  ($srv_chan, @jobs, $finished, $reconnecting);
 my  (%local_users, $passwd_modified_stamp);
 my  ($unix_seqno);
@@ -331,7 +331,7 @@ sub user_logout ($$$) {
 # main loop
 #
 
-sub main () {
+sub main_loop () {
     read_config($config_file, [ qw(
                     server
                 )],
@@ -345,15 +345,17 @@ sub main () {
     fail("$ifconfig: executable not found") unless -x $ifconfig;
     log_init();
 
-    ssl_startup();
-    ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
-
+    debug("setting up");
     ev_create_loop();
+
     if (daemonize()) {
         # clone event loop in the child
         $ev_loop->loop_fork();
     }
 
+    debug("post-fork setup");
+    ssl_startup();
+    ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
     unix_listen();
     reconnect(1);
     $ev_watch{update} = $ev_loop->timer(0, $uw_config{update_interval},
@@ -361,7 +363,6 @@ sub main () {
 
     info("$progname started");
     $ev_loop->loop();
-    exit(0);
 }
 
 #
@@ -523,5 +524,15 @@ sub cleanup () {
 }
 
 END { cleanup(); }
-main();
+
+while (1) {
+    main_loop();
+    last unless $ev_reload;
+    info("$progname reloading");
+    cleanup();
+    $ev_reload = 0;
+}
+
+exit(0);
+
 

@@ -17,7 +17,7 @@ use DBI;
 use EV;
 
 our ($config_file, $progname, %uw_config);
-our ($ev_loop, %ev_watch);
+our ($ev_loop, %ev_watch, $ev_reload);
 our ($ldap_child);
 
 my  ($dbh, %sth_cache);
@@ -309,7 +309,7 @@ sub login_weight ($) {
 #
 # main code
 #
-sub main () {
+sub main_loop () {
     read_config($config_file, [ qw(
                     vpn_net mysql_host mysql_db mysql_user mysql_pass
                     ldap_uri ldap_bind_dn ldap_bind_pass ldap_user_base
@@ -332,16 +332,18 @@ sub main () {
     $vpn_regex =~ s/\./\\./g;
     $vpn_regex = qr[$vpn_regex];
 
+    debug("setting up");
     ldap_init(1);
     mysql_connect();
-
     ev_create_loop();
+
     if (daemonize()) {
         # clone dbi-mysql and event loop in the child
         mysql_clone();
         $ev_loop->loop_fork();
     }
 
+    debug("post-fork setup");
     ldap_init(0);
     ssl_startup();
     ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
@@ -354,7 +356,6 @@ sub main () {
 
     info("$progname started");
     $ev_loop->loop();
-    exit(0);
 }
 
 sub ssl_accept_pending ($) {
@@ -412,6 +413,15 @@ sub cleanup () {
 }
 
 END { cleanup(); }
-main();
+
+while (1) {
+    main_loop();
+    last unless $ev_reload;
+    info("$progname reloading");
+    cleanup();
+    $ev_reload = 0;
+}
+
+exit(0);
 
 
