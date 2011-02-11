@@ -28,26 +28,35 @@ my  ($ldap_conn, %uid_cache);
 #
 # initialize ldap subsystem
 #
-sub ldap_init (;$) {
-    my ($just_test) = @_;
-    ldap_close();
+sub ldap_init ($) {
+    my ($first_init) = @_;
+
+    if (!$first_init && $ldap_conn) {
+        debug("ldap already initialized");
+        return "";
+    }
 
     #
     # Due to a bug in Net::SSLeay SSL in OpenLDAP
     # badly affects main SSL exchange.
     # Workaround: fork a subprocess for LDAP.
     #
-    my $need_fork = ($uw_config{ldap_uri} =~ m/^ldaps:/);
+    my $need_fork = $uw_config{ldap_start_tls}
+                    || ($uw_config{ldap_uri} =~ m/^ldaps:/);
     $need_fork = 1 if $uw_config{ldap_force_fork};
-    $need_fork = 0 if $just_test;
+    if ($first_init && $need_fork) {
+        info("connecting to ldap later as connecting now would screw up ssl");
+        return "ssl";
+    }
+
+    ldap_close();
 
     if ($need_fork) {
         _ldap_child_start();
         # will not return in child
     }
 
-    my $msg = _ldap_init($just_test);
-    return $msg;
+    return _ldap_init($first_init);
 }
 
 #
@@ -212,7 +221,7 @@ sub _ldap_child_start () {
     cleanup();
     detach_stdio() if $uw_config{daemonize};
 
-    _ldap_init();
+    _ldap_init(0);
     _ldap_child_loop();
 
     debug("quitting ldap child");
@@ -290,17 +299,16 @@ sub _ldap_wait_reply ($$) {
 #
 # connection to ldap for browsing
 #
-sub _ldap_init (;$) {
-    my ($just_test) = @_;
+sub _ldap_init ($) {
+    my ($first_init) = @_;
 
     _ldap_cache_flush();
 
     my ($msg, $conn) = _ldap_connect($uw_config{ldap_bind_dn},
                                     undef, $uw_config{ldap_bind_pass},
-                                    $just_test);
-    if ($just_test) {
-        info("warning: ldap init failed: $msg") if $msg;
-        return $msg;
+                                    0);
+    if ($first_init && $msg) {
+        info("warning: ldap init failed: $msg");
     }
 
     $ldap_conn = $conn unless $msg;
@@ -331,13 +339,17 @@ sub _ldap_connect ($$$$) {
 
     $conn->unbind() if $just_check;
 
-    debug("ldap auth uri:%s tls:%s bind:%s pass:%s returns: %s",
+    my $error = 0;
+    $error = "server down" unless $res;
+    $error = $res->error() if $res && $res->code();
+    debug("ldap auth uri:%s tls:%s bind:%s pass:%s error:%s",
             $uw_config{ldap_uri}, $uw_config{ldap_start_tls},
             $bind_dn, $pass, $res->error());
-    return "invalid password" if $res->code();
+    $error = "invalid password" if $error && $user;
+    undef $conn if $error;
 
     # success
-    return (0, $conn);
+    return ($error, $conn);
 }
 
 #
@@ -362,7 +374,7 @@ sub _ldap_search ($$) {
             # unexpected eof. try to reconnect
             debug("restoring ldap connection ($try)");
             undef $ldap_conn;
-            _ldap_init();
+            _ldap_init(0);
             # a little delay
             select(undef, undef, undef, $ldap_try_delay);
         } else {
@@ -370,6 +382,7 @@ sub _ldap_search ($$) {
         }
     }
 
+    return ("server down") unless $res;
     return ($res->error()) if $res->code();
 
     my @res = ("");

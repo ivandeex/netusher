@@ -335,16 +335,16 @@ sub main () {
     ldap_init(1);
     mysql_connect();
 
-    ssl_startup();
-    ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
-
     ev_create_loop();
     if (daemonize()) {
         # clone dbi-mysql and event loop in the child
         mysql_clone();
         $ev_loop->loop_fork();
     }
-    ldap_init();
+
+    ldap_init(0);
+    ssl_startup();
+    ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
 
     my $s_chan = ssl_listen($uw_config{port});
     ev_add_chan($s_chan, 's_acccept', &EV::READ, \&ssl_accept_pending);
