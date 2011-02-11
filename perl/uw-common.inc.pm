@@ -14,6 +14,7 @@ use Carp;
 use Sys::Syslog;
 use POSIX;
 use EV;
+use Time::HiRes; qw(gettimeofday);
 
 ##############################################
 # Configuration file
@@ -120,9 +121,9 @@ sub fail ($@) {
     undef $SIG{__DIE__};
     $msg = sprintf("[%5d] ", $$) . $msg;
     if ($uw_config{stacktrace}) {
-        confess($msg);
+        confess(_fmtmsg($msg));
     } else {
-        die("$msg\n");
+        die(_fmtmsg($msg));
     }
 }
 
@@ -130,7 +131,7 @@ sub info ($@) {
     my $fmt = shift;
     chomp(my $msg = "[ info] " . sprintf($fmt, @_));
     syslog("notice", $msg) if $uw_config{syslog};
-    printf("[%5d] %s\n", $$, $msg) if $uw_config{stdout};
+    print _fmtmsg($msg) if $uw_config{stdout};
 }
 
 sub debug ($@) {
@@ -138,7 +139,15 @@ sub debug ($@) {
     my $fmt = shift;
     chomp(my $msg = "[debug] " . sprintf($fmt, @_));
     syslog("info", $msg) if $uw_config{syslog};
-    printf("[%5d] %s\n", $$, $msg) if $uw_config{stdout};    
+    print _fmtmsg($msg) if $uw_config{stdout};    
+}
+
+sub _fmtmsg ($) {
+    my ($msg) = @_;
+    my ($sec, $usec) = Time::HiRes::gettimeofday();
+    return sprintf("[%s.%03d] [%5d] %s\n",
+                    POSIX::strftime('%H:%M:%S', localtime($sec)),
+                    $usec/1000, $$, $msg);
 }
 
 ##############################################
