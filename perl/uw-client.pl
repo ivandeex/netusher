@@ -321,7 +321,13 @@ sub user_login ($$$$$) {
     my $req = create_request("I", 0, {
                 method => $method, user => $user, pass => $pass, uid => $uid
                 });
-    queue_job($req, $chan, "$user: user login");
+    if (check_auth_cache($user, $uid, $pass) == 0) {
+        info("$user: user login: OK (cached)");
+        queue_job($req, undef);
+        return "OK";
+    }
+    queue_job($req, $chan, message => "$user: user login",
+                user => $user, uid => $uid, pass => $pass);
     return;
 }
 
@@ -330,8 +336,18 @@ sub user_logout ($$$) {
     my $req = create_request("O", 0, {
                 method => $method, user => $user, uid => 0
                 });
-    queue_job($req, $chan, "$user: user logout");
+    queue_job($req, $chan, message => "$user: user logout");
     return;
+}
+
+sub handle_reply ($$$) {
+    my ($job, $p, $reply) = @_;
+    if ($p->{message}) {
+        info("%s: %s", $p->{message}, $reply);
+    }
+    if ($p->{pass}) {
+        update_auth_cache($p->{user}, $p->{uid}, $p->{pass}, $reply);
+    }
 }
 
 #
@@ -345,7 +361,7 @@ sub main_loop () {
                 [ qw(
                     port ca_cert peer_pem idle_timeout rw_timeout
                     also_local syslog stdout debug stacktrace daemonize
-                    connect_interval update_interval
+                    connect_interval update_interval auth_cache_ttl
                 )]);
     fail("$config_file: server host undefined")
         unless $uw_config{server};
@@ -376,13 +392,13 @@ sub main_loop () {
 # job queue
 #
 
-sub queue_job ($$;$) {
-    my ($req, $chan, $message) = @_;
+sub queue_job ($$%) {
+    my ($req, $chan, %params) = @_;
     push @jobs, {
         req => $req,
         chan => $chan,
         source => $chan ? $chan->{addr} : "none",
-        message => $message
+        params => %params ? \%params : undef
         };
     handle_next_job();
 }
@@ -515,10 +531,10 @@ sub _srv_read_done ($$$) {
         return;
     }
 
-    debug("received reply \"%s\" for %s", $reply, $job->{source});
+    debug("%s: got reply \"%s\" for %s", $chan->{addr}, $reply, $job->{source});
     unix_write_reply($job->{chan}, $reply) if $job->{chan};
-    info("%s: %s", $job->{message}, $reply) if $job->{message};
-
+    handle_reply($job, $job->{params}, $reply) if $job->{params};
+    undef $job;
     handle_next_job();
 }
 
