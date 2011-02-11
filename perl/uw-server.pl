@@ -9,6 +9,7 @@ use FindBin qw($Bin);
 require "$Bin/uw-common.inc.pm";
 require "$Bin/uw-ssl.inc.pm";
 require "$Bin/uw-ldap.inc.pm";
+require "$Bin/uw-cache.inc.pm";
 
 #
 # require: perl-DBD-mysql, perl-LDAP, perl-EV
@@ -22,6 +23,10 @@ our ($ldap_child);
 
 my  ($dbh, %sth_cache);
 my  ($vpn_regex);
+
+our %cache_backend = (
+            get_user_uid    => \&ldap_get_user_uid
+        );
 
 #
 # Currently only one "main" user per host is allowed.
@@ -130,7 +135,7 @@ sub handle_req ($) {
         my $log_usr = $req->{log_usr};
 
         # first, verify that user exists at all
-        my $uid = ldap_get_uid($log_usr->{user});
+        my $uid = get_user_uid($log_usr->{user});
         return "user not found"
             unless defined $uid;
 
@@ -227,7 +232,7 @@ sub update_user_mapping ($$$) {
 
         # skip local users and users with id that does not match
         unless ($uw_config{also_local}) {
-            my $uid = ldap_get_uid($u->{user});
+            my $uid = get_user_uid($u->{user});
             unless (defined $uid) {
                 debug("%s: skip local user", $u->{user});
                 next;

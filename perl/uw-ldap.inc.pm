@@ -22,8 +22,7 @@ my $ldap_maxtries = 2;
 my $ldap_try_delay = 0.100;
 
 our ($ldap_parent, $ldap_child);
-my  ($ldap_pid, $ldap_sock, $ldap_restart_count);
-my  ($ldap_conn, %uid_cache);
+my  ($ldap_conn, $ldap_pid, $ldap_sock, $ldap_restart_count);
 
 #
 # initialize ldap subsystem
@@ -64,7 +63,7 @@ sub ldap_init ($) {
 # stop ldap subsystem
 #
 sub ldap_close () {
-    _ldap_cache_flush();
+    cache_flush();
 
     if ($ldap_parent) {
         _ldap_child_stop();
@@ -76,10 +75,6 @@ sub ldap_close () {
         eval { $ldap_conn->disconnect() };
         undef $ldap_conn;
     }
-}
-
-sub _ldap_cache_flush () {
-    %uid_cache = ();
 }
 
 #
@@ -98,46 +93,18 @@ sub ldap_auth ($$) {
 #
 # return uidNumber for a user
 #
-sub ldap_get_uid ($) {
+sub ldap_get_user_uid ($) {
     my ($user) = @_;
     my ($uid, $msg);
-
-    # try to fetch uid from cache
-    my $stamp = time();
-    if (exists($uid_cache{$user})) {
-        if ($stamp - $uid_cache{$user}{stamp} < $uw_config{cache_retention}) {
-            $uid = $uid_cache{$user}{uid};
-            debug("ldap get uid user:$user uid:$uid from cache");
-            return $uid;
-        }
-        delete $uid_cache{$user};
-    }
-
-    ($uid, $msg) = _ldap_get_uid($user);
-    if ($msg) {
-        debug("ldap get uid for user=$user: $msg");
-        return;
-    }
-
-    # update cache with defined or undefined uid
-    $uid_cache{$user}{uid} = $uid;
-    $uid_cache{$user}{stamp} = $stamp;
-    debug("ldap_get_uid user:$user uid:$uid message:$msg");
-    return $uid;
-}
-
-sub _ldap_get_uid ($) {
-    my ($user) = @_;
-    my ($uid, $msg);
-    my $uid_attr = $uw_config{ldap_attr_user};
     if ($ldap_parent) {
         my $reply = _ldap_wait_reply("UID $user");
         ($uid, $msg) = ($1, $2) if $reply =~ /^(\S+) (.*)$/;
         undef $uid if $uid eq "-";
     } else {
-        my (@res) = _ldap_search("($uid_attr=$user)", [ $uid_attr ]);
+        my ($attr_user, $attr_uid) = @uw_config{qw(ldap_attr_user ldap_attr_uid)};
+        my (@res) = _ldap_search("($attr_user=$user)", [ $attr_uid ]);
         $msg = $res[0];
-        $uid = $res[1]->{$uid_attr};
+        $uid = $res[1]->{$attr_uid};
     }
     return ($uid, $msg);
 }
@@ -146,24 +113,22 @@ sub _ldap_get_uid ($) {
 # main child loop
 #
 sub _ldap_child_loop () {
-    # child lives in the loop
     debug("ldap child waiting for commands");
     while (<$ldap_sock>) {
         chomp;
         my @cmd = split / /;
-        debug("ldap child got command: %s", join(' ', @cmd));
         my ($quit, $reply);
         if ($cmd[0] eq "QUIT") {
             $reply = "BYE";
             $quit = 1;
         }
         elsif ($cmd[0] eq "HELLO") {
-            #if ($ldap_restart_count < 3) { debug("child sleep"); sleep(1) for (0 .. 9); }
             $reply = "OK";
         }
         elsif ($cmd[0] eq "UID") {
-            my ($uid, $msg) = _ldap_get_uid($cmd[1]);
+            my ($uid, $msg) = ldap_get_user_uid($cmd[1]);
             $uid = "-" if !defined($uid) || $uid eq "";
+            $msg = "0" unless $msg;
             $reply = "$uid $msg";
         }
         elsif ($cmd[0] eq "AUTH") {
@@ -204,10 +169,8 @@ sub _ldap_child_start () {
         $ldap_sock = $sock_parent;
         $ldap_sock->autoflush(1);
         
-        debug("wait for status from ldap child");
         my $reply = _ldap_wait_reply("HELLO", 1);
         next unless $reply;
-        debug("status from ldap child: $reply");
         return $reply;
     }
 
@@ -277,12 +240,10 @@ sub _ldap_wait_reply ($$) {
         my $remaining = $timeout;
         while ($remaining > 0) {
             vec($vec, fileno($ldap_sock), 1) = 1;
-            debug("DEBUG: parent wait for %f seconds", $remaining);
             ($nfound) = select($vec, undef, undef, $remaining);
             last if $nfound > 0;
             $remaining = $timeout - (time() - $begtime);
         }
-        debug("DEBUG: parent got $nfound after wait: $!");
         if ($nfound > 0) {
             # read the reply
             chomp(my $reply = <$ldap_sock>);
@@ -303,8 +264,7 @@ sub _ldap_wait_reply ($$) {
 #
 sub _ldap_init ($) {
     my ($first_init) = @_;
-
-    _ldap_cache_flush();
+    cache_flush();
 
     my ($msg, $conn) = _ldap_connect($uw_config{ldap_bind_dn},
                                     undef, $uw_config{ldap_bind_pass},

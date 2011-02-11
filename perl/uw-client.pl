@@ -26,6 +26,9 @@ my  ($unix_seqno);
 
 my $ifconfig = "/sbin/ifconfig";
 
+our %cache_backend = (
+        );
+
 #
 # Unix-domain sockets
 #
