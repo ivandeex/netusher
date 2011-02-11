@@ -20,16 +20,16 @@ sub cache_flush () {
 }
 
 #
-# return uidNumber for a user
+# return uidNumber for a user (used by server)
 #
 sub get_user_uid ($) {
     my ($user) = @_;
     my ($uid, $msg);
 
     # try to fetch uid from cache
-    my $stamp = time();
-    if (exists($user_cache{$user})) {
-        if ($stamp - $user_cache{$user}{stamp} < $uw_config{cache_retention}) {
+    my $stamp = monotonic_time();
+    if (exists($user_cache{$user}{uid})) {
+        if ($stamp - $user_cache{$user}{stamp} < $uw_config{uid_cache_ttl}) {
             $uid = $user_cache{$user}{uid};
             debug("get_user_uid user:$user uid:$uid from:cache");
             return $uid;

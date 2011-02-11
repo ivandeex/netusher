@@ -236,13 +236,13 @@ sub _ldap_wait_reply ($$) {
     for (my $try = 1; $try <= $ldap_maxtries; $try++) {
         _ldap_send_req($req) if defined $req;
         my ($vec, $nfound);
-        my $begtime = time();
+        my $begtime = monotonic_time();
         my $remaining = $timeout;
         while ($remaining > 0) {
             vec($vec, fileno($ldap_sock), 1) = 1;
             ($nfound) = select($vec, undef, undef, $remaining);
             last if $nfound > 0;
-            $remaining = $timeout - (time() - $begtime);
+            $remaining = $timeout - (monotonic_time() - $begtime);
         }
         if ($nfound > 0) {
             # read the reply

@@ -14,7 +14,7 @@ use Carp;
 use Sys::Syslog;
 use POSIX;
 use EV;
-use Time::HiRes; qw(gettimeofday);
+use Time::HiRes qw(gettimeofday clock_gettime CLOCK_MONOTONIC);
 
 ##############################################
 # Configuration file
@@ -62,7 +62,7 @@ our %uw_config = (
         ldap_attr_user  => 'uid',
         ldap_attr_uid   => 'uidNumber',
         ldap_timeout    => 5,
-        cache_retention => 300,
+        uid_cache_ttl   => 0,
         user_retention  => 300,
         purge_interval  => 300,
     );
@@ -144,10 +144,14 @@ sub debug ($@) {
 
 sub _fmtmsg ($) {
     my ($msg) = @_;
-    my ($sec, $usec) = Time::HiRes::gettimeofday();
+    my ($sec, $usec) = gettimeofday();
     return sprintf("[%s.%03d] [%5d] %s\n",
                     POSIX::strftime('%H:%M:%S', localtime($sec)),
                     $usec/1000, $$, $msg);
+}
+
+sub monotonic_time () {
+    return clock_gettime(CLOCK_MONOTONIC);
 }
 
 ##############################################

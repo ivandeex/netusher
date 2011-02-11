@@ -323,8 +323,8 @@ sub main_loop () {
                     port ca_cert peer_pem idle_timeout rw_timeout
                     also_local syslog stdout debug stacktrace daemonize
                     ldap_attr_user ldap_attr_uid ldap_start_tls ldap_timeout
-                    ldap_force_fork
-                    cache_retention user_retention purge_interval mysql_port
+                    ldap_force_fork mysql_port uid_cache_ttl
+                    user_retention purge_interval
                 )]);
     log_init();
 
