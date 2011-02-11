@@ -237,7 +237,12 @@ sub ssl_accept ($;$) {
 
     my $paddr = accept(my $conn, $s_chan->{conn});
     unless ($paddr) {
-        debug("ssl_accept accept: $!");
+        my $error = $!;
+        info("ssl_accept accept error: $error");
+        if ($error =~ /Invalid argument/i) {
+            info("the accept failure is probably caused by killed ldap child. reloading.");
+            kill(1, $$);
+        }
         return;
     }
     my ($port, $iaddr) = sockaddr_in($paddr);
