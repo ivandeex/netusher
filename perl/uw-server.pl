@@ -42,6 +42,10 @@ my %login_method_weight = (
     );
 my $min_login_weight = 6;
 
+##############################################
+# requests
+#
+
 #
 # parse request string.
 #
@@ -62,7 +66,7 @@ sub parse_req ($) {
         if length($cmd) != 1 || index("IOC", $cmd) < 0;
 
     # logon user
-    my $log_usr = {
+    my $usr = {
             beg_time => $arr[1],
             method => $arr[2],
             user => $arr[3],
@@ -70,9 +74,9 @@ sub parse_req ($) {
             pass => $arr[5]
             };
     return "invalid begin time"
-        if $log_usr->{beg_time} !~ /^\d+$/;
+        if $usr->{beg_time} ne "" && $usr->{beg_time} !~ /^\d+$/;
     return "invalid uid"
-        if $log_usr->{uid} && $log_usr->{uid} !~ /^\d+$/;
+        if $usr->{uid} && $usr->{uid} !~ /^\d+$/;
 
     # parse IP list
     my @ips;
@@ -107,14 +111,17 @@ sub parse_req ($) {
         push @users, $u;
     }
 
-    return { cmd => $cmd, log_usr => $log_usr, ips => \@ips, users => \@users };
+    return { cmd => $cmd, log_usr => $usr, ips => \@ips, users => \@users };
 }
 
 #
 # handle client request.
 #
-sub handle_req ($) {
+sub handle_request ($) {
     my ($req) = @_;
+    my $cmd = $req->{cmd};
+    my $usr = $req->{log_usr};
+    my $users = $req->{users};
 
     # select client ip belonging to vpn
     my $vpn_ip;
@@ -130,95 +137,36 @@ sub handle_req ($) {
         unless defined $vpn_ip;
     debug("client vpn ip: $vpn_ip");
 
-    if ($req->{cmd} eq 'I') {
-        # user login handler
-        my $log_usr = $req->{log_usr};
-
+    if ($cmd eq 'I' || $cmd eq 'O') {
         # first, verify that user exists at all
-        my $uid = get_user_uid($log_usr->{user});
-        return "user not found"
-            unless defined $uid;
+        my $uid = get_user_uid($usr->{user});
+        return "user not found" unless defined $uid;
 
         # verify that user id matches ldap
-        if (defined($log_usr->{uid}) && $log_usr->{uid} ne ''
-                && $log_usr->{uid} != $uid) {
+        if (defined($usr->{uid}) && $usr->{uid} ne '' && $usr->{uid} != $uid) {
             debug("%s: uid %s does not match ldap %s",
-                   $log_usr->{user}, $log_usr->{uid}, $uid);
+                   $usr->{user}, $usr->{uid}, $uid);
             return "invalid uid";
         }
+    }
 
+    if ($cmd eq 'I') {
+        # verify login time
+        return "invalid login time" if $usr->{beg_time} !~ /^\d+$/;
         # verify user password
-        my ($msg, $dummy_conn) = ldap_auth($log_usr->{user}, $log_usr->{pass});
+        my $msg = ldap_auth($usr->{user}, $usr->{pass});
         return $msg if $msg;
-
         # add this user to the beginning of the big list
-        unshift @{ $req->{users} }, $log_usr;
-    }
-    elsif ($req->{cmd} eq 'O') {
-        # logout
+        unshift @$users, $usr;
     }
 
-    update_user_mapping($req->{cmd}, $vpn_ip, $req->{users});
+    if ($cmd eq 'O') {
+        # user logout
+        $users = [ $usr ];
+    }
+
+    update_user_mapping($cmd, $vpn_ip, $users);
     return "OK";
-}
-
-##############################################
-# mysql stuff
-#
-
-sub mysql_connect () {
-    mysql_close();
-    my $uri = sprintf("DBI:mysql:%s;host=%s",
-                    $uw_config{mysql_db}, $uw_config{mysql_host});
-    $dbh = DBI->connect($uri, $uw_config{mysql_user}, $uw_config{mysql_pass})
-		or fail("cannot connect to database");
-    $dbh->{mysql_enable_utf8} = 1;
-    $dbh->{mysql_auto_reconnect} = 1;
-    $dbh->{AutoCommit} = 0;
-    $dbh->do("SET NAMES 'utf8'");
-}
-
-sub mysql_close () {
-    %sth_cache = ();
-    if (defined $dbh) {
-        eval { $dbh->disconnect() };
-        undef $dbh;
-    }
-}
-
-sub mysql_clone () {
-    my $child_dbh = $dbh->clone();
-    mysql_close();
-    $dbh = $child_dbh;
-}
-
-sub mysql_execute ($@) {
-    my ($sql, @params) = @_;
-    my $sth = $sth_cache{$sql};
-    unless (defined $sth) {
-        $sth = $dbh->prepare($sql);
-        $sth_cache{$sql} = $sth;
-    }
-    my $ok = { $sth->execute(@params) };
-    my $num = $sth->rows();
-    if (!$ok) {
-        info("mysql error: %s\n", $sth->errstr());
-        $num = -1;
-    }
-    debug("execute: %s\n\t((%s)) = \"%s\"", $sql,
-         join(',', map { defined($_) ? "\"$_\"" : "NULL" } @params),
-         $num);
-    return $sth;
-}
-
-sub mysql_fetch1 ($) {
-    my ($sth) = @_;
-    my @row = $sth->fetchrow_array();
-    return $row[0];
-}
-
-sub mysql_commit () {
-    eval { $dbh->commit(); };
 }
 
 ##############################################
@@ -265,18 +213,22 @@ sub update_user_mapping ($$$) {
         }
     }
 
-    my $best_weight = login_weight($best);
-    $cmd = 'O' if $best_weight < $min_login_weight;
-
-    if (defined $best) {
-        debug("best: user:%s method:%s id:%s beg_time:%s weight:%s cmd:%s",
-                $best->{user}, $best->{method}, $best->{uid},
-                $best->{beg_time}, $best_weight, $cmd);
-    } else {
+    unless (defined $best) {
         debug("ldap users not found");
+        iptables_update($vpn_ip, users_from_ip($vpn_ip));
+        return;
     }
 
-    if ($best && ($cmd eq 'I' || $cmd eq 'C')) {
+    my $best_weight = login_weight($best);
+    debug("best: user:%s method:%s id:%s beg_time:%s weight:%s cmd:%s",
+            $best->{user}, $best->{method}, $best->{uid},
+            $best->{beg_time}, $best_weight, $cmd);
+    if ($best_weight < $min_login_weight) {
+        # if weight is less then allowed, remove the user from database
+        $cmd = 'O';
+    }
+
+    if ($cmd eq 'I' || $cmd eq 'C') {
         # if there were previous active users, end their sessions
         mysql_execute(
             "UPDATE uw_users
@@ -297,16 +249,19 @@ sub update_user_mapping ($$$) {
     }
 
     # logout: update existing user record
-    if ($best && $cmd eq 'O') {
+    if ($cmd eq 'O') {
         mysql_execute(
             "UPDATE uw_users SET end_time = NOW(), running = 0
-            WHERE beg_time = FROM_UNIXTIME(?)
-            AND username = ? AND vpn_ip = ?",
-            $best->{beg_time}, $best->{user}, $vpn_ip);
+            WHERE username = ? AND vpn_ip = ?
+            AND ('' = ? OR method = ?)
+            AND ('' = ? OR beg_time = FROM_UNIXTIME(?))",
+            $best->{user}, $vpn_ip,
+            $best->{method}, $best->{method},
+            $best->{beg_time}, $best->{beg_time});
     }
 
     mysql_commit();
-    iptables_update($vpn_ip, users_from_ip($vpn_ip));
+    iptables_update($vpn_ip);
 }
 
 #
@@ -345,9 +300,11 @@ my ($chains_enable, %chains_ips, %chains_extra);
 my (%chains_vpn, %chains_real, %chains_all);
 my ($iptables_fail_num, $iptables_fail_log);
 
-sub iptables_update ($$) {
-    my ($vpn_ip, $active) = @_;
+sub iptables_update ($) {
+    my ($vpn_ip) = @_;
     return unless $chains_enable;
+    my $active = users_from_ip($vpn_ip);
+    debug("got $active active users from $vpn_ip");
     my $changed;
     if ($active) {
         for my $chain (keys %chains_vpn) {
@@ -598,6 +555,65 @@ sub iptables_close () {
 }
 
 ##############################################
+# mysql stuff
+#
+
+sub mysql_connect () {
+    mysql_close();
+    my $uri = sprintf("DBI:mysql:%s;host=%s",
+                    $uw_config{mysql_db}, $uw_config{mysql_host});
+    $dbh = DBI->connect($uri, $uw_config{mysql_user}, $uw_config{mysql_pass})
+		or fail("cannot connect to database");
+    $dbh->{mysql_enable_utf8} = 1;
+    $dbh->{mysql_auto_reconnect} = 1;
+    $dbh->{AutoCommit} = 0;
+    $dbh->do("SET NAMES 'utf8'");
+}
+
+sub mysql_close () {
+    %sth_cache = ();
+    if (defined $dbh) {
+        eval { $dbh->disconnect() };
+        undef $dbh;
+    }
+}
+
+sub mysql_clone () {
+    my $child_dbh = $dbh->clone();
+    mysql_close();
+    $dbh = $child_dbh;
+}
+
+sub mysql_execute ($@) {
+    my ($sql, @params) = @_;
+    my $sth = $sth_cache{$sql};
+    unless (defined $sth) {
+        $sth = $dbh->prepare($sql);
+        $sth_cache{$sql} = $sth;
+    }
+    my $ok = { $sth->execute(@params) };
+    my $num = $sth->rows();
+    if (!$ok) {
+        info("mysql error: %s\n", $sth->errstr());
+        $num = -1;
+    }
+    debug("execute: %s\n\t((%s)) = \"%s\"", $sql,
+         join(',', map { defined($_) ? "\"$_\"" : "NULL" } @params),
+         $num);
+    return $sth;
+}
+
+sub mysql_fetch1 ($) {
+    my ($sth) = @_;
+    my @row = $sth->fetchrow_array();
+    return $row[0];
+}
+
+sub mysql_commit () {
+    eval { $dbh->commit(); };
+}
+
+##############################################
 # main code
 #
 
@@ -681,7 +697,7 @@ sub _ssl_read_done ($$$) {
     my $ret;
     if (ref($req) eq 'HASH') {
         debug('request from %s', $c_chan->{addr});
-        $ret = handle_req($req);
+        $ret = handle_request($req);
     } else {
         info("%s: invalid request (error:%s)", $c_chan->{addr}, $req);
         $ret = "invalid request";

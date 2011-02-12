@@ -220,9 +220,10 @@ sub get_local_users () {
 #
 # get list of active users
 #
-sub get_user_list () {
+sub get_active_users () {
     # scan utmpx
     my @user_list;
+    get_local_users();
 
     for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx()) {
         next unless $ut->{ut_type} == USER_PROCESS;
@@ -266,23 +267,21 @@ sub get_user_list () {
 #
 # make the request packet
 #
-sub create_request ($$;$) {
-    my ($cmd, $do_get_list, $log_usr) = @_;
+sub create_request ($$$$) {
+    my ($cmd, $get_list, $time, $usr) = @_;
 
-    my $line = sprintf('%s:%09d:', $cmd, time);
+    my $line = sprintf('%s:%s:', $cmd, $time);
 
-    $log_usr = {} unless defined $log_usr;
-    $line .= sprintf('%s:%s:%s:%s',
-                    $log_usr->{method}, $log_usr->{user},
-                    $log_usr->{uid}, $log_usr->{pass});
+    $usr = {} unless defined $usr;
+    $line .= sprintf('%s:%s:%s:%s', $usr->{method}, $usr->{user},
+                                    $usr->{uid}, $usr->{pass});
 
     my @ip_list = get_ip_list();
     $line .= ":~:" . sprintf('%03d:', $#ip_list + 1)
             . join(':', @ip_list) . ":~:";
 
-    if ($do_get_list) {
-        get_local_users();
-        my (@user_list) = get_user_list();
+    if ($get_list) {
+        my (@user_list) = get_active_users();
         $line .= sprintf('%03d', $#user_list + 1);
         for my $u (@user_list) {
             $line .= sprintf(':%09d:%3s:%s:%s:/',
@@ -304,8 +303,10 @@ sub update_active_users ($) {
     my ($chan) = @_;
     debug("update active users");
     return "no connection" unless $srv_chan;
-    my $req = create_request("C", 1);
+    get_local_users();
+    my $req = create_request("C", 1, undef, undef);
     queue_job($req, $chan);
+    # return nothing for channel to wait for server reply
     return;
 }
 
@@ -316,7 +317,7 @@ sub user_login ($$$$$) {
         debug("$user: local user login");
         return "OK";
     }
-    my $req = create_request("I", 0, {
+    my $req = create_request("I", 0, time(), {
                 method => $method, user => $user, pass => $pass, uid => $uid
                 });
     if (check_auth_cache($user, $uid, $pass) == 0) {
@@ -326,18 +327,39 @@ sub user_login ($$$$$) {
     }
     queue_job($req, $chan, message => "$user: user login",
                 user => $user, uid => $uid, pass => $pass);
+    # return nothing for channel to wait for server reply
     return;
 }
 
 sub user_logout ($$$) {
     my ($method, $user, $chan) = @_;
-    my $req = create_request("O", 0, {
-                method => $method, user => $user, uid => 0
+
+    # if this user is local, don't bother the server
+    get_local_users();
+    if (!$uw_config{also_local} && exists($local_users{$user})) {
+        debug("$user: local user logout");
+        return "local";
+    }
+
+    # maybe other such users still exist?
+    for my $u (get_active_users()) {
+        if ($u->{user} eq $user && $u->{method} eq $method) {
+            debug("$user: more users exist with method $method");
+            return "got more";
+        }
+    }
+
+    my $req = create_request("O", 0, undef, {
+                method => $method, user => $user, uid => ""
                 });
     queue_job($req, $chan, message => "$user: user logout");
+    # return nothing for channel to wait for server reply
     return;
 }
 
+#
+# handle extra fields of the reply from server
+#
 sub handle_reply ($$$) {
     my ($job, $p, $reply) = @_;
     if ($p->{message}) {
