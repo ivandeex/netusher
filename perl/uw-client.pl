@@ -21,7 +21,8 @@ use IO::Socket::UNIX;
 
 our ($config_file, $progname, %uw_config);
 our ($ev_loop, %ev_watch, $ev_reload);
-my  ($srv_chan, @jobs, $finished, $reconnecting);
+my  ($srv_chan, @jobs, $finished);
+my  ($reconnect_pending, $reconnect_fast);
 my  (%local_users, $passwd_modified_stamp);
 my  ($unix_seqno);
 
@@ -404,7 +405,8 @@ sub main_loop () {
     ssl_startup();
     ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
     unix_listen();
-    reconnect(1);
+    $reconnect_fast = 1;
+    reconnect();
     $ev_watch{update} = $ev_loop->timer(0, $uw_config{update_interval},
                                         sub { update_active_users(undef) });
 
@@ -450,9 +452,8 @@ sub handle_next_job () {
 # reconnections
 #
 
-sub reconnect (;$) {
-    my ($now) = @_;
-    $reconnecting = 1;
+sub reconnect () {
+    $reconnect_pending = 1;
     cache_flush();
 
     # close previous server connection, if any
@@ -465,13 +466,14 @@ sub reconnect (;$) {
     # initiate new connection to server
     delete $ev_watch{try_con};
     delete $ev_watch{wait_con};
+    my $interval = $uw_config{connect_interval};
     $ev_watch{try_con} = $ev_loop->timer(
-                            $now ? 0 : $uw_config{connect_interval},
-                            $uw_config{connect_interval},
+                            ($reconnect_fast ? 0 : $interval), $interval,
                             \&connect_attempt);
 
-    $reconnecting = 0;
-    debug("reconnection started (now:$now)...");
+    debug("reconnection started (fast:$reconnect_fast)...");
+    $reconnect_pending = 0;
+    $reconnect_fast = 0;
 }
 
 sub connect_attempt () {
@@ -513,17 +515,21 @@ sub _srv_disconnect ($) {
     my ($chan) = @_;
     ssl_disconnect($chan);
     undef $srv_chan;
-    reconnect() if !$finished && !$reconnecting;
+    reconnect() if !$finished && !$reconnect_pending;
 }
 
 sub on_connect ($) {
     my ($chan) = @_;
 
     info("connected to server");
-    $ev_watch{update}->set(0, $uw_config{update_interval});
+    # update user list immediately
+    $ev_watch{update}->again();
 
+    # our special destructor will initiate immediate reconnection
     $chan->{destructor} = \&_srv_disconnect;
     ev_add_chan($srv_chan = $chan);
+    # reconnection will start immediately after detected disconnect
+    $reconnect_fast = 1;
 
     handle_next_job();
 }
