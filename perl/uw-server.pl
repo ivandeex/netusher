@@ -36,11 +36,11 @@ our %cache_backend = (
 
 my %login_method_weight = (
     'XDM' => 5,
-    'RSH' => 6,
+    'RSH' => 4,
     'CON' => 2,
     'XTY' => 1,
     );
-my $min_login_weight = 6;
+my $min_login_weight = 4;
 
 ##############################################
 # requests
