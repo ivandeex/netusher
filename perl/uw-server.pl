@@ -264,19 +264,6 @@ sub update_user_mapping ($$$) {
     iptables_update($vpn_ip);
 }
 
-#
-# number of users logged from a given ip
-#
-sub users_from_ip ($) {
-    my ($vpn_ip) = @_;
-    my $sth = mysql_execute("SELECT COUNT(*) FROM uw_users
-                            WHERE running = 1 AND vpn_ip = ?",
-                            $vpn_ip);
-    my $count = mysql_fetch1($sth);
-    $count = 0 unless $count;
-    return $count;
-}
-
 sub purge_expired_users () {
     debug("purge expired users");
     mysql_execute(sprintf("
@@ -292,6 +279,20 @@ sub login_weight ($) {
     return defined($weight) ? $weight : 0;
 }
 
+#
+# number of users logged from a given ip
+#
+sub users_from_ip ($) {
+    my ($vpn_ip) = @_;
+    return 0 unless $vpn_ip;
+    my $sth = mysql_execute("SELECT COUNT(*) FROM uw_users
+                            WHERE running = 1 AND vpn_ip = ?",
+                            $vpn_ip);
+    my $count = mysql_fetch1($sth);
+    $count = 0 unless $count;
+    return $count;
+}
+
 ##############################################
 # iptables control
 #
@@ -304,28 +305,64 @@ sub iptables_update ($) {
     my ($vpn_ip) = @_;
     return unless $chains_enable;
     my $active = users_from_ip($vpn_ip);
-    debug("got $active active users from $vpn_ip");
-    my $changed;
+    my $real_ip = get_real_ip($vpn_ip);
+    debug("got $active active users from vpn:$vpn_ip real:$real_ip");
+
+    my ($chain, $changed);
     if ($active) {
-        for my $chain (keys %chains_vpn) {
-            if (!$chains_ips{$chain}{$vpn_ip}) {
-                enable_ip($chain, $vpn_ip, 1, 0);
-                $changed = 1;
+        # enable
+        if ($vpn_ip) {
+            for $chain (keys %chains_vpn) {
+                if (!$chains_ips{$chain}{$vpn_ip}) {
+                    enable_ip($chain, $vpn_ip, 1, 0);
+                    $changed = 1;
+                }
+            }
+        }
+        if ($real_ip) {
+            for $chain (keys %chains_real) {
+                if (!$chains_ips{$chain}{$real_ip}) {
+                    enable_ip($chain, $real_ip, 1, 0);
+                    $changed = 1;
+                }
             }
         }
     } else {
-        for my $chain (keys %chains_vpn) {
-            if ($chains_ips{$chain}{$vpn_ip}) {
-                enable_ip($chain, $vpn_ip, 0, 0);
-                $changed = 1;
+        # disable
+        if ($vpn_ip) {
+            for $chain (keys %chains_vpn) {
+                if ($chains_ips{$chain}{$vpn_ip}) {
+                    enable_ip($chain, $vpn_ip, 0, 0);
+                    $changed = 1;
+                }
+            }
+        }
+        if ($real_ip) {
+            for $chain (keys %chains_real) {
+                if ($chains_ips{$chain}{$real_ip}) {
+                    enable_ip($chain, $real_ip, 0, 0);
+                    $changed = 1;
+                }
             }
         }
     }
+
     if ($changed) {
         iptables_save_status();
-        debug("iptables: %s vpn ip %s",
-                ($active ? "enable" : "disable"), $vpn_ip);
+        debug("iptables: enable:%s vpn:%s real:%s ",
+                $active, $vpn_ip, $real_ip);
     }
+}
+
+sub get_real_ip ($) {
+    my ($vpn_ip) = @_;
+    return unless $vpn_ip;
+    my $sth = mysql_execute("SELECT real_ip FROM uw_openvpn
+                            WHERE running = 1 AND vpn_ip = ?
+                            LIMIT 1",
+                            $vpn_ip);
+    my $real_ip = mysql_fetch1($sth);
+    return $real_ip;
 }
 
 sub enable_ip ($$$$) {
