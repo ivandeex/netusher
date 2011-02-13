@@ -202,7 +202,7 @@ sub _ldap_child_stop ($) {
             kill(9, $ldap_pid);
         } elsif (!_ldap_wait_reply("QUIT", 1)) {
             info("ldap child hung during exit");
-            kill(9, $ldap_child);
+            kill(9, $ldap_pid);
         }
         waitpid($ldap_pid, WNOHANG);
         undef $ldap_pid;
