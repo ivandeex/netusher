@@ -373,7 +373,7 @@ sub enable_ip ($$$$) {
     } else {
         delete $chains_ips{$chain}{$ip};
     }
-    return run_iptables("$flag $chain -s $ip", $log);
+    return run_iptables("$flag $chain -s $ip -j ACCEPT", $log);
 }
 
 sub iptables_init () {
@@ -394,7 +394,7 @@ sub iptables_init () {
     }
 
     create_parent_dir($uw_config{iptables_status});
-    iptables_rescsan();
+    iptables_rescan();
 }
 
 sub iptables_close () {
@@ -771,13 +771,14 @@ sub _ssl_read_done ($$$) {
     my $req = parse_req($pkt);
     my $ret;
     if (ref($req) eq 'HASH') {
-        debug('request from %s', $c_chan->{addr});
+        debug("request from %s \"%s\"", $c_chan->{addr}, $pkt);
         $ret = handle_request($req);
     } else {
         info("%s: invalid request (error:%s)", $c_chan->{addr}, $req);
         $ret = "invalid request";
     }
 
+    debug("reply to %s \"%s\"", $c_chan->{addr}, $ret);
     ssl_write_packet($c_chan, $ret, \&_ssl_write_done, 0);
 }
 
@@ -785,7 +786,7 @@ sub _ssl_write_done ($$$) {
     my ($c_chan, $success, $param) = @_;
 
     if ($success) {
-        debug("%s: reply completed", $c_chan->{addr});
+        #debug("%s: reply completed", $c_chan->{addr});
         ssl_read_packet($c_chan, \&_ssl_read_done, $c_chan);
     } else {
         debug("%s: disconnected during write", $c_chan->{addr});
