@@ -224,6 +224,8 @@ sub ev_close ($) {
 sub ev_close_all () {
     ev_close($_) for (values %ev_chans);
     %ev_chans = ();
+    delete $ev_watch{$_} for (keys %ev_watch);
+    %ev_watch = ();
 }
 
 ##############################################
@@ -304,7 +306,7 @@ sub _chan_timeout_handler ($$) {
 # Daemonization
 #
 
-my  ($in_parent, $pid_written, $already_daemon);
+my  ($in_parent, $pid_written, $already_daemon, %temp_files);
 
 sub daemonize () {
     return 0 if !$uw_config{daemonize} || $already_daemon;
@@ -355,6 +357,8 @@ sub create_parent_dir ($) {
 }
 
 sub end_daemon () {
+    unlink($_) for (keys %temp_files);
+    %temp_files = ();
     return if $in_parent || $ev_reload;
     unlink($uw_config{pid_file}) if $pid_written;
     info("$progname finished");
@@ -363,18 +367,20 @@ sub end_daemon () {
 sub run_prog ($;$) {
     my ($cmd, $out_ref) = @_;
     my $kid;
-    if ($out_ref && 0) {
+    if ($out_ref && 1) {
         $SIG{PIPE} = "IGNORE";
-        my $pid = open(my $stdout, "$cmd 2>&1 |")
-            or fail("$cmd: failed to run: $!");
-        my $rs = $/;
-        undef $/;
-        my $out = <$stdout>;
-        $$out_ref = $out;
-        undef $out;
+        my ($out, $file, $temp, $rs);
+        $temp = "/tmp/xxx.$progname.run.".time().".$$";
+        $temp_files{$temp} = 1;
+        system("$cmd >$temp 2>&1");
+        $kid = $?;
+        open($file, $temp);
+        $rs = $/; undef $/;
+        $out = <$file>; $$out_ref = $out; undef $out;
         $/ = $rs;
-        close($stdout);
-        $kid = waitpid($pid, 0);
+        close($file);
+        unlink($temp);
+        delete $temp_files{$temp};
     } else {
         system("$cmd >/dev/null 2>&1");
         $kid = $?;

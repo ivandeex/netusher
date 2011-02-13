@@ -393,6 +393,24 @@ sub iptables_init () {
             if $chains_all{$chain};
     }
 
+    create_parent_dir($uw_config{iptables_status});
+    iptables_rescsan();
+}
+
+sub iptables_close () {
+    $chains_enable = 0;
+    %chains_ips = ();
+    %chains_extra = ();
+    %chains_vpn = ();
+    %chains_real = ();
+    %chains_all = ();
+    $iptables_fail_num = 0;
+    $iptables_fail_log = "";
+}
+
+sub iptables_rescan () {
+    debug("rescan iptables");
+
     # setup structures
     my $iptables = $uw_config{iptables};
     my (%chain_exists, %chains_extra_set);
@@ -416,47 +434,53 @@ sub iptables_init () {
             close($file);
         }
         elsif ($source eq "iptables") {
-            run_prog($uw_config{iptables_save}, \$out);
+            my $ret = run_prog($uw_config{iptables_save}, \$out);
         }
 
         # scan current source line by line
         for (split /\n/, $out) {
+            # remove program name
+            s/^\s*${iptables}\s+//;
+
             # skip empty lines and comments
             chomp; s/\s+/ /g; s/^ //; s/ $//;
             next if /^$/ || /^\#/;
-
-            # remove program name
-            if ($source eq "status") {
-                s/^${iptables}//;
-            }
+            my $line = $_;
+            #debug("ip scan source:$source line:$line");
 
             # detect whether chains exist
-            if ($source eq "iptables" && /^:(\S+) \S/) {
-                $chain_exists{$1} = 1;
+            if ($source eq "iptables" && $line =~ /^:(\S+) \S/) {
+                my ($chain) = ($1);
+                $chain_exists{$chain} = 1;
+                #debug("ip scan source:$source found chain:$chain");
                 next;
             }
 
             # simple rules for ordinary IPs
-            if (/^-A (\S+) -s ([\w\d\.\:]+) -j ACCEPT$/) {
+            if ($line =~ /^-A (\S+) -s ([\w\d\.\:]+) -j ACCEPT$/) {
                 my ($chain, $ip) = ($1, $2);
                 my $is_vpn = ($ip =~ $vpn_regex) ? 1 : 0;
                 if ($chains_vpn{$chain} && $is_vpn) {
                     $chains_ips{$chain}{$ip} = $source;
+                    debug("ip scan source $source chain $chain vpn: $ip");
                     next;
                 }
                 if ($chains_real{$chain} && !$is_vpn) {
                     $chains_ips{$chain}{$ip} = $source;
+                    debug("ip scan source:$source chain:$chain real: $ip");
                     next;
                 }
             }
 
             # custom user rules
-            if (/^-A (\S+) (\S.*)$/) {
+            if ($line =~ /^-A (\S+) (\S.*)$/) {
                 my ($chain, $rule) = ($1, $2);
                 next unless $chains_all{$chain};
-                next if $chains_extra_set{$chain}{$rule};
+                my $exists = exists $chains_extra_set{$chain}{$rule};
                 $chains_extra_set{$chain}{$rule} = $source;
-                push @{ $chains_extra{$chain} }, $rule;
+                debug("ip scan source:$source chain:$chain rule: $rule");
+                push(@{ $chains_extra{$chain} }, $rule)  unless $exists;
+                next;
             }
         }
     }
@@ -476,17 +500,20 @@ sub iptables_init () {
     for my $chain (keys %chains_all) {
         if (!$chain_exists{$chain}) {
             $need_update{$chain} = "create";
+            debug("chain $chain needs: create");
             next CHAIN_FOR_UPDATE;
         }
         for my $src (values %{ $chains_extra_set{$chain} }) {
             if ($src ne "iptables") {
                 $need_update{$chain} = "extra";
+                debug("chain $chain needs: extra rules");
                 next CHAIN_FOR_UPDATE;
             }
         }
         for my $src (values %{ $chains_ips{$chain} }) {
             if ($src ne "iptables") {
                 $need_update{$chain} = "ip";
+                debug("chain $chain needs: add IPs");
                 next CHAIN_FOR_UPDATE;
             }
         }
@@ -498,9 +525,15 @@ sub iptables_init () {
     my $temp = "USERWATCH_TEMP";
 
     for my $chain (sort keys %need_update) {
-        run_iptables("-F $temp", 0);
-        run_iptables("-X $temp", 0);
+        debug("begin test of chain $chain changes");
+        sleep(1);
+        if ($chain_exists{$temp}) {
+            run_iptables("-F $temp", 0);
+            run_iptables("-X $temp", 0);
+            $chain_exists{$temp} = 0;
+        }
         run_iptables("-N $temp", 1);
+        $chain_exists{$temp} = 1;
         last if $iptables_fail_num;
 
         for my $ip (sort keys %{ $chains_ips{$chain} }) {
@@ -514,31 +547,46 @@ sub iptables_init () {
     }
 
     # remove temporary chain and check the result
-    run_iptables("-F $temp", 0);
-    run_iptables("-X $temp", 0);
+    if ($chain_exists{$temp}) {
+        run_iptables("-F $temp", 0);
+        run_iptables("-X $temp", 0);
+        $chain_exists{$temp} = 0;
+    }
     fail("iptables error:\n%s", $iptables_fail_log)
         if $iptables_fail_num;
 
-    # since test is fine, repeat the actions with real chains
+    # since test is fine, repeat actions on real chains
     for my $chain (sort keys %need_update) {
-        run_iptables("-N $chain", 0) unless $chain_exists{$chain};
-        run_iptables("-F $chain", 0);
+        run_iptables("-N $chain", 0)
+            unless $chain_exists{$chain};
 
-        for my $ip (sort keys %{ $chains_ips{$chain} }) {
-            run_iptables("-A $chain -s $ip -j ACCEPT", 1);
+        if ($need_update{$chain} eq "ip") {
+            # simply add IPs to the beginning of the chain
+            for my $ip (sort keys %{ $chains_ips{$chain} }) {
+                if ($chains_ips{$chain}{$ip} ne "iptables") {
+                    run_iptables("-I $chain -s $ip -j ACCEPT", 1);
+                }
+            }
         }
-        for my $rule (@{ $chains_extra{$chain} }) {
-            run_iptables("-A $chain $rule", 1);
+        else {
+            # fully remake the chain
+            run_iptables("-F $chain", 0);
+            for my $ip (sort keys %{ $chains_ips{$chain} }) {
+                run_iptables("-A $chain -s $ip -j ACCEPT", 1);
+            }
+            for my $rule (@{ $chains_extra{$chain} }) {
+                run_iptables("-A $chain $rule", 1);
+            }
         }
     }
 
     if ($iptables_fail_num) {
         info("warning: iptables errors: %s", $iptables_fail_log);
     } elsif (%need_update) {
-        info("iptables modified successfully");
+        info("iptables modified successfully: %s",
+            join(" ", sort keys %need_update));
     }
 
-    create_parent_dir($uw_config{iptables_status});
     iptables_save_status();
 }
 
@@ -571,24 +619,13 @@ sub run_iptables ($$) {
     my ($cmd, $log) = @_;
     my $iptables = $uw_config{iptables};
     my $out;
-    #debug("run $iptables $cmd ...");
     my $ret = run_prog("$iptables $cmd", \$out);
     if ($ret && $log) {
         $iptables_fail_num++;
         $iptables_fail_log .= $out;
     }
+    debug("$iptables ($ret) \"$cmd\"");
     return $ret;
-}
-
-sub iptables_close () {
-    $chains_enable = 0;
-    %chains_ips = ();
-    %chains_extra = ();
-    %chains_vpn = ();
-    %chains_real = ();
-    %chains_all = ();
-    $iptables_fail_num = 0;
-    $iptables_fail_log = "";
 }
 
 ##############################################
@@ -675,7 +712,6 @@ sub main_loop () {
                     iptables
                 )]);
     log_init();
-    iptables_init();
 
     # create regular expression for vpn network
     $vpn_regex = $uw_config{vpn_net};
@@ -690,6 +726,7 @@ sub main_loop () {
     ldap_init(1);
     mysql_connect();
     ev_create_loop();
+    iptables_init();
 
     if (daemonize()) {
         # clone dbi-mysql and event loop in the child
@@ -703,10 +740,11 @@ sub main_loop () {
     ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
 
     my $s_chan = ssl_listen($uw_config{port});
-    ev_add_chan($s_chan, 's_acccept', &EV::READ, \&ssl_accept_pending);
+    ev_add_chan($s_chan, "s_acccept", &EV::READ, \&ssl_accept_pending);
 
     $ev_watch{purge} = $ev_loop->timer(0, $uw_config{purge_interval},
                                         \&purge_expired_users);
+    $ev_watch{iptables} = $ev_loop->signal("USR1", \&iptables_recreate);
 
     info("$progname started");
     $ev_loop->loop();
@@ -756,6 +794,7 @@ sub _ssl_write_done ($$$) {
 }
 
 sub cleanup () {
+    iptables_close();
     ev_close_all();
     ssl_destroy_context();
     ldap_close();
