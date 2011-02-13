@@ -554,6 +554,7 @@ sub _srv_read_done ($$$) {
 sub cleanup () {
     $finished = 1;
     ev_close_all();
+    ev_remove_handlers();
     ssl_destroy_context();
     end_daemon();
 }

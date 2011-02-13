@@ -224,6 +224,9 @@ sub ev_close ($) {
 sub ev_close_all () {
     ev_close($_) for (values %ev_chans);
     %ev_chans = ();
+}
+
+sub ev_remove_handlers () {
     delete $ev_watch{$_} for (keys %ev_watch);
     %ev_watch = ();
 }

@@ -801,6 +801,7 @@ sub cleanup () {
     ssl_destroy_context();
     ldap_close();
     unless ($ldap_child) {
+        ev_remove_handlers();
         # disconnecting from mysql in a child process screws up parent
         mysql_close();
         end_daemon();
