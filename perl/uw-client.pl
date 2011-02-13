@@ -31,7 +31,354 @@ my  ($unix_seqno);
 our %cache_backend = (
         );
 
+##############################################
+# typical operations
 #
+
+sub handle_unix_request ($$) {
+    my ($chan, $req) = (@_);
+    my (@arg) = split(/\s+/, $req);
+    my $cmd = $arg[0];
+    if ($cmd eq "echo") {
+        $req =~ s/^\s*\w+\s+//;
+        return $req;
+    } elsif ($cmd eq "login") {
+        return $#arg != 3 ? "usage: login XDM|RSH|CON user pass"
+                    : user_login($arg[1], $arg[2], $arg[3], undef, $chan);
+    } elsif ($cmd eq "logout") {
+        return $#arg != 2 ? "usage: logout XDM|RSH|CON user"
+                    : user_logout($arg[1], $arg[2], $chan);
+    } elsif ($cmd eq "update") {
+        return $#arg != 0 ? "usage: update"
+                    : update_active_users($chan);
+    } else {
+        return "usage: login|logout|update|echo [args...]";
+    }
+}
+
+#
+# handle extra fields of the reply from server
+#
+sub handle_reply ($$$) {
+    my ($job, $p, $reply) = @_;
+    if ($p->{message}) {
+        info("%s: %s", $p->{message}, $reply);
+    }
+    if ($p->{pass}) {
+        update_auth_cache($p->{user}, $p->{uid}, $p->{pass}, $reply);
+    }
+}
+
+sub update_active_users ($) {
+    my ($chan) = @_;
+    debug("update active users");
+    return "no connection" unless $srv_chan;
+    get_local_users();
+    my $req = create_request("C", 1, undef, undef);
+    queue_job($req, $chan);
+    # return nothing for channel to wait for server reply
+    return;
+}
+
+sub user_login ($$$$$) {
+    my ($method, $user, $pass, $uid, $chan) = @_;
+    get_local_users();
+    if (!$uw_config{also_local} && exists($local_users{$user})) {
+        debug("$user: local user login");
+        return "OK";
+    }
+    my $req = create_request("I", 0, time(), {
+                method => $method, user => $user, pass => $pass, uid => $uid
+                });
+    if (check_auth_cache($user, $uid, $pass) == 0) {
+        info("$user: user login: OK (cached)");
+        queue_job($req, undef);
+        return "OK";
+    }
+    queue_job($req, $chan, message => "$user: user login",
+                user => $user, uid => $uid, pass => $pass);
+    # return nothing for channel to wait for server reply
+    return;
+}
+
+sub user_logout ($$$) {
+    my ($method, $user, $chan) = @_;
+
+    # if this user is local, don't bother the server
+    get_local_users();
+    if (!$uw_config{also_local} && exists($local_users{$user})) {
+        debug("$user: local user logout");
+        return "local";
+    }
+
+    # maybe other such users still exist?
+    for my $u (get_active_users()) {
+        if ($u->{user} eq $user && $u->{method} eq $method) {
+            debug("$user: more users exist with method $method");
+            return "got more";
+        }
+    }
+
+    my $req = create_request("O", 0, undef, {
+                method => $method, user => $user, uid => ""
+                });
+    queue_job($req, $chan, message => "$user: user logout");
+    # return nothing for channel to wait for server reply
+    return;
+}
+
+#
+# make the request packet
+#
+sub create_request ($$$$) {
+    my ($cmd, $get_list, $time, $usr) = @_;
+
+    my $line = sprintf('%s:%s:', $cmd, $time);
+
+    $usr = {} unless defined $usr;
+    $line .= sprintf('%s:%s:%s:%s', $usr->{method}, $usr->{user},
+                                    $usr->{uid}, $usr->{pass});
+
+    my @ip_list = get_ip_list();
+    $line .= ":~:" . sprintf('%03d:', $#ip_list + 1)
+            . join(':', @ip_list) . ":~:";
+
+    if ($get_list) {
+        my (@user_list) = get_active_users();
+        $line .= sprintf('%03d', $#user_list + 1);
+        for my $u (@user_list) {
+            $line .= sprintf(':%09d:%3s:%s:%s:/',
+                            $u->{beg_time}, $u->{method},
+                            $u->{user}, $u->{uid});
+        }
+    } else {
+        $line .= "---";
+    }
+
+    return $line . ":~";
+}
+
+#
+# scan interfaces
+#
+sub get_ip_list () {
+    my @ip_list;
+    $SIG{PIPE} = "IGNORE";
+    my $pid = open(my $out, "$uw_config{ifconfig} 2>/dev/null |");
+    fail("$uw_config{ifconfig}: failed to run") unless $pid;
+    while (<$out>) {
+        next unless m"^\s+inet addr:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+\w";
+        next if $1 eq "127.0.0.1";
+        push @ip_list, $1;
+    }
+    close($out);
+    my $kid = waitpid($pid, 0);
+    debug("ip_list: %s", join(',', @ip_list));
+    return @ip_list;
+}
+
+#
+# get list of active users
+#
+sub get_active_users () {
+    get_local_users();
+    my @user_list;
+
+    # scan utmpx
+    for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx()) {
+        next unless $ut->{ut_type} == USER_PROCESS;
+        # filter out local users
+        my $user = $ut->{ut_user};
+        next if !$uw_config{also_local} && exists($local_users{$user});
+
+        # detect login methos
+        my $method;
+        my $id = $ut->{ut_id};
+        if ($id =~ m"^s/\d+$") { $method = "RSH" }
+        elsif ($id =~ m"^\d+$") { $method = "CON" }
+        elsif ($id =~ m"^:\d+(\.\d+)?$") { $method = "XDM" }
+        elsif ($id =~ m"^/\d+$") { $method = "XTY" }
+        elsif ($ut->{ut_addr}) { $method = "RSH" }
+        else { $method = "UNK" }
+
+        # detect user id
+        my $uid = "";
+        if (exists $local_users{$user}) {
+            $uid = $local_users{$user};
+        } else {
+            my ($xname, $xpass, $xuid) = getpwnam($user);
+            $uid = $xuid if defined $xuid;
+        }
+
+        my $u = {
+                beg_time => $ut->{ut_time},
+                method => $method,
+                user => $user,
+                uid => $uid,
+                };
+        push @user_list, $u;
+        debug("user_list next: user:%s uid:%s method:%s beg_time:%s",
+                $user, $uid, $method, $u->{beg_time});
+    }
+
+    return @user_list;
+}
+
+##############################################
+# job queue
+#
+
+sub queue_job ($$%) {
+    my ($req, $chan, %params) = @_;
+    push @jobs, {
+        req => $req,
+        chan => $chan,
+        source => $chan ? $chan->{addr} : "none",
+        params => %params ? \%params : undef
+        };
+    handle_next_job();
+}
+
+sub handle_next_job () {
+    unless (@jobs) {
+        debug("next job: queue empty");
+        return;
+    }
+    unless ($srv_chan) {
+        debug("next job: no connection");
+        return;
+    }
+    if ($srv_chan->{io_watch}) {
+        debug("next job: another job running");
+        return;
+    }
+
+    my $job = shift @jobs;
+    debug("sending job %s from %s", $job->{req}, $job->{source});
+    ssl_write_packet($srv_chan, $job->{req}, \&_srv_write_done, $job);
+}
+
+##############################################
+# reconnections
+#
+
+sub reconnect () {
+    $reconnect_pending = 1;
+    cache_flush();
+
+    # close previous server connection, if any
+    if ($srv_chan) {
+        debug("disconnect previous server connection");
+        ev_close($srv_chan);
+        undef $srv_chan;
+    }
+
+    # initiate new connection to server
+    delete $ev_watch{try_con};
+    delete $ev_watch{wait_con};
+    my $interval = $uw_config{connect_interval};
+    $ev_watch{try_con} = $ev_loop->timer(
+                            ($reconnect_fast ? 0 : $interval), $interval,
+                            \&connect_attempt);
+
+    debug("reconnection started (fast:$reconnect_fast)...");
+    $reconnect_pending = 0;
+    $reconnect_fast = 0;
+}
+
+sub connect_attempt () {
+    debug("try to connect...");
+    my $chan = ssl_connect($uw_config{server}, $uw_config{port}, \&ev_close);
+    return unless $chan;
+
+    delete $ev_watch{try_con};
+    delete $ev_watch{wait_con};
+
+    if ($chan->{pending}) {
+        ev_add_chan($chan, 'wait_con', &EV::READ | &EV::WRITE, \&connect_pending);
+        return;
+    }
+
+    on_connect($chan);
+}
+
+sub connect_pending ($) {
+    my ($chan) = @_;
+    my $code = ssl_connected($chan);
+    if ($code eq "pending") {
+        debug("connection still pending...");
+        return;
+    }
+
+    if ($code ne "ok") {
+        debug("connection aborted");
+        $srv_chan = $chan;
+        reconnect();
+        return;
+    }
+
+    delete $ev_watch{wait_con};
+    on_connect($chan);
+}
+
+sub _srv_disconnect ($) {
+    my ($chan) = @_;
+    ssl_disconnect($chan);
+    undef $srv_chan;
+    reconnect() if !$finished && !$reconnect_pending;
+}
+
+sub on_connect ($) {
+    my ($chan) = @_;
+
+    info("connected to server");
+    # update user list immediately
+    $ev_watch{update}->set(0, $uw_config{update_interval});
+
+    # our special destructor will initiate immediate reconnection
+    $chan->{destructor} = \&_srv_disconnect;
+    ev_add_chan($srv_chan = $chan);
+    # reconnection will start immediately after detected disconnect
+    $reconnect_fast = 1;
+
+    handle_next_job();
+}
+
+##############################################
+# SSL reading and writing
+#
+
+sub _srv_write_done ($$$) {
+    my ($chan, $success, $job) = @_;
+
+    unless ($success) {
+        debug("re-queue job from %s after failed write", $job->{source});
+        unshift @jobs, $job;
+        reconnect();
+        return;
+    }
+
+    ssl_read_packet($srv_chan, \&_srv_read_done, $job);
+}
+
+sub _srv_read_done ($$$) {
+    my ($chan, $reply, $job) = @_;
+
+    unless (defined $reply) {
+        debug("re-queue job from %s after failed read", $job->{source});
+        unshift @jobs, $job;
+        reconnect();
+        return;
+    }
+
+    debug("%s: got reply \"%s\" for %s", $chan->{addr}, $reply, $job->{source});
+    unix_write_reply($job->{chan}, $reply) if $job->{chan};
+    handle_reply($job, $job->{params}, $reply) if $job->{params};
+    undef $job;
+    handle_next_job();
+}
+
+##############################################
 # Unix-domain sockets
 #
 
@@ -157,200 +504,7 @@ sub unix_disconnect ($) {
     }
 }
 
-sub handle_unix_request ($$) {
-    my ($chan, $req) = (@_);
-    my (@arg) = split(/\s+/, $req);
-    my $cmd = $arg[0];
-    if ($cmd eq "echo") {
-        $req =~ s/^\s*\w+\s+//;
-        return $req;
-    } elsif ($cmd eq "login") {
-        return $#arg != 3 ? "usage: login XDM|RSH|CON user pass"
-                    : user_login($arg[1], $arg[2], $arg[3], undef, $chan);
-    } elsif ($cmd eq "logout") {
-        return $#arg != 2 ? "usage: logout XDM|RSH|CON user"
-                    : user_logout($arg[1], $arg[2], $chan);
-    } elsif ($cmd eq "update") {
-        return $#arg != 0 ? "usage: update"
-                    : update_active_users($chan);
-    } else {
-        return "usage: login|logout|update|echo [args...]";
-    }
-}
-
-#
-# scan interfaces
-#
-sub get_ip_list () {
-    my @ip_list;
-    $SIG{PIPE} = "IGNORE";
-    my $pid = open(my $out, "$uw_config{ifconfig} 2>/dev/null |");
-    fail("$uw_config{ifconfig}: failed to run") unless $pid;
-    while (<$out>) {
-        next unless m"^\s+inet addr:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+\w";
-        next if $1 eq "127.0.0.1";
-        push @ip_list, $1;
-    }
-    close($out);
-    my $kid = waitpid($pid, 0);
-    debug("ip_list: %s", join(',', @ip_list));
-    return @ip_list;
-}
-
-#
-# get list of active users
-#
-sub get_active_users () {
-    # scan utmpx
-    my @user_list;
-    get_local_users();
-
-    for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx()) {
-        next unless $ut->{ut_type} == USER_PROCESS;
-        # filter out local users
-        my $user = $ut->{ut_user};
-        next if !$uw_config{also_local} && exists($local_users{$user});
-
-        # detect login methos
-        my $method;
-        my $id = $ut->{ut_id};
-        if ($id =~ m"^s/\d+$") { $method = "RSH" }
-        elsif ($id =~ m"^\d+$") { $method = "CON" }
-        elsif ($id =~ m"^:\d+(\.\d+)?$") { $method = "XDM" }
-        elsif ($id =~ m"^/\d+$") { $method = "XTY" }
-        elsif ($ut->{ut_addr}) { $method = "RSH" }
-        else { $method = "UNK" }
-
-        # detect user id
-        my $uid = "";
-        if (exists $local_users{$user}) {
-            $uid = $local_users{$user};
-        } else {
-            my ($xname, $xpass, $xuid) = getpwnam($user);
-            $uid = $xuid if defined $xuid;
-        }
-
-        my $u = {
-                beg_time => $ut->{ut_time},
-                method => $method,
-                user => $user,
-                uid => $uid,
-                };
-        push @user_list, $u;
-        debug("user_list next: user:%s uid:%s method:%s beg_time:%s",
-                $user, $uid, $method, $u->{beg_time});
-    }
-
-    return @user_list;
-}
-
-#
-# make the request packet
-#
-sub create_request ($$$$) {
-    my ($cmd, $get_list, $time, $usr) = @_;
-
-    my $line = sprintf('%s:%s:', $cmd, $time);
-
-    $usr = {} unless defined $usr;
-    $line .= sprintf('%s:%s:%s:%s', $usr->{method}, $usr->{user},
-                                    $usr->{uid}, $usr->{pass});
-
-    my @ip_list = get_ip_list();
-    $line .= ":~:" . sprintf('%03d:', $#ip_list + 1)
-            . join(':', @ip_list) . ":~:";
-
-    if ($get_list) {
-        my (@user_list) = get_active_users();
-        $line .= sprintf('%03d', $#user_list + 1);
-        for my $u (@user_list) {
-            $line .= sprintf(':%09d:%3s:%s:%s:/',
-                            $u->{beg_time}, $u->{method},
-                            $u->{user}, $u->{uid});
-        }
-    } else {
-        $line .= "---";
-    }
-
-    return $line . ":~";
-}
-
-#
-# typical operations
-#
-
-sub update_active_users ($) {
-    my ($chan) = @_;
-    debug("update active users");
-    return "no connection" unless $srv_chan;
-    get_local_users();
-    my $req = create_request("C", 1, undef, undef);
-    queue_job($req, $chan);
-    # return nothing for channel to wait for server reply
-    return;
-}
-
-sub user_login ($$$$$) {
-    my ($method, $user, $pass, $uid, $chan) = @_;
-    get_local_users();
-    if (!$uw_config{also_local} && exists($local_users{$user})) {
-        debug("$user: local user login");
-        return "OK";
-    }
-    my $req = create_request("I", 0, time(), {
-                method => $method, user => $user, pass => $pass, uid => $uid
-                });
-    if (check_auth_cache($user, $uid, $pass) == 0) {
-        info("$user: user login: OK (cached)");
-        queue_job($req, undef);
-        return "OK";
-    }
-    queue_job($req, $chan, message => "$user: user login",
-                user => $user, uid => $uid, pass => $pass);
-    # return nothing for channel to wait for server reply
-    return;
-}
-
-sub user_logout ($$$) {
-    my ($method, $user, $chan) = @_;
-
-    # if this user is local, don't bother the server
-    get_local_users();
-    if (!$uw_config{also_local} && exists($local_users{$user})) {
-        debug("$user: local user logout");
-        return "local";
-    }
-
-    # maybe other such users still exist?
-    for my $u (get_active_users()) {
-        if ($u->{user} eq $user && $u->{method} eq $method) {
-            debug("$user: more users exist with method $method");
-            return "got more";
-        }
-    }
-
-    my $req = create_request("O", 0, undef, {
-                method => $method, user => $user, uid => ""
-                });
-    queue_job($req, $chan, message => "$user: user logout");
-    # return nothing for channel to wait for server reply
-    return;
-}
-
-#
-# handle extra fields of the reply from server
-#
-sub handle_reply ($$$) {
-    my ($job, $p, $reply) = @_;
-    if ($p->{message}) {
-        info("%s: %s", $p->{message}, $reply);
-    }
-    if ($p->{pass}) {
-        update_auth_cache($p->{user}, $p->{uid}, $p->{pass}, $reply);
-    }
-}
-
-#
+##############################################
 # main loop
 #
 
@@ -391,160 +545,6 @@ sub main_loop () {
 
     info("$progname started");
     $ev_loop->loop();
-}
-
-#
-# job queue
-#
-
-sub queue_job ($$%) {
-    my ($req, $chan, %params) = @_;
-    push @jobs, {
-        req => $req,
-        chan => $chan,
-        source => $chan ? $chan->{addr} : "none",
-        params => %params ? \%params : undef
-        };
-    handle_next_job();
-}
-
-sub handle_next_job () {
-    unless (@jobs) {
-        debug("next job: queue empty");
-        return;
-    }
-    unless ($srv_chan) {
-        debug("next job: no connection");
-        return;
-    }
-    if ($srv_chan->{io_watch}) {
-        debug("next job: another job running");
-        return;
-    }
-
-    my $job = shift @jobs;
-    debug("sending job %s from %s", $job->{req}, $job->{source});
-    ssl_write_packet($srv_chan, $job->{req}, \&_srv_write_done, $job);
-}
-
-#
-# reconnections
-#
-
-sub reconnect () {
-    $reconnect_pending = 1;
-    cache_flush();
-
-    # close previous server connection, if any
-    if ($srv_chan) {
-        debug("disconnect previous server connection");
-        ev_close($srv_chan);
-        undef $srv_chan;
-    }
-
-    # initiate new connection to server
-    delete $ev_watch{try_con};
-    delete $ev_watch{wait_con};
-    my $interval = $uw_config{connect_interval};
-    $ev_watch{try_con} = $ev_loop->timer(
-                            ($reconnect_fast ? 0 : $interval), $interval,
-                            \&connect_attempt);
-
-    debug("reconnection started (fast:$reconnect_fast)...");
-    $reconnect_pending = 0;
-    $reconnect_fast = 0;
-}
-
-sub connect_attempt () {
-    debug("try to connect...");
-    my $chan = ssl_connect($uw_config{server}, $uw_config{port}, \&ev_close);
-    return unless $chan;
-
-    delete $ev_watch{try_con};
-    delete $ev_watch{wait_con};
-
-    if ($chan->{pending}) {
-        ev_add_chan($chan, 'wait_con', &EV::READ | &EV::WRITE, \&connect_pending);
-        return;
-    }
-
-    on_connect($chan);
-}
-
-sub connect_pending ($) {
-    my ($chan) = @_;
-    my $code = ssl_connected($chan);
-    if ($code eq "pending") {
-        debug("connection still pending...");
-        return;
-    }
-
-    if ($code ne "ok") {
-        debug("connection aborted");
-        $srv_chan = $chan;
-        reconnect();
-        return;
-    }
-
-    delete $ev_watch{wait_con};
-    on_connect($chan);
-}
-
-sub _srv_disconnect ($) {
-    my ($chan) = @_;
-    ssl_disconnect($chan);
-    undef $srv_chan;
-    reconnect() if !$finished && !$reconnect_pending;
-}
-
-sub on_connect ($) {
-    my ($chan) = @_;
-
-    info("connected to server");
-    # update user list immediately
-    $ev_watch{update}->set(0, $uw_config{update_interval});
-
-    # our special destructor will initiate immediate reconnection
-    $chan->{destructor} = \&_srv_disconnect;
-    ev_add_chan($srv_chan = $chan);
-    # reconnection will start immediately after detected disconnect
-    $reconnect_fast = 1;
-
-    handle_next_job();
-}
-
-#
-# reading and writing
-#
-
-sub _srv_write_done ($$$) {
-    my ($chan, $success, $job) = @_;
-
-    unless ($success) {
-        debug("re-queue job from %s after failed write", $job->{source});
-        unshift @jobs, $job;
-        reconnect();
-        return;
-    }
-
-    ssl_read_packet($srv_chan, \&_srv_read_done, $job);
-}
-
-sub _srv_read_done ($$$) {
-    my ($chan, $reply, $job) = @_;
-
-    unless (defined $reply) {
-        debug("re-queue job from %s after failed read", $job->{source});
-        unshift @jobs, $job;
-        reconnect();
-        return;
-    }
-
-    debug("%s: got reply \"%s\" for %s", $chan->{addr}, $reply, $job->{source});
-    unix_write_reply($job->{chan}, $reply) if $job->{chan};
-    handle_reply($job, $job->{params}, $reply) if $job->{params};
-    undef $job;
-    handle_next_job();
 }
 
 #
