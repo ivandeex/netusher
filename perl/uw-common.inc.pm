@@ -268,12 +268,16 @@ sub init_transmission ($$$) {
     $chan->{rwt_fired} = 0;
 }
 
-sub fire_transmission ($;$) {
-    my ($chan, $new_event_mask) = @_;
-    if (defined($new_event_mask) && $chan->{event_mask} != $new_event_mask) {
-        $chan->{event_mask} = $new_event_mask;
-        $chan->{io_watch}->events($new_event_mask);
+sub change_event_mask ($$) {
+    my ($chan, $event_mask) = @_;
+    if ($chan->{event_mask} != $event_mask && $chan->{io_watch}) {
+        $chan->{event_mask} = $event_mask;
+        $chan->{io_watch}->events($event_mask);
     }
+}
+
+sub fire_transmission ($) {
+    my ($chan) = @_;
     if ($chan->{rwt_watch} && !$chan->{rwt_fired}) {
         $chan->{rwt_watch}->again();
         $chan->{rwt_fired} = 1;

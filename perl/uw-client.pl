@@ -502,7 +502,7 @@ sub on_connect ($) {
 
     info("connected to server");
     # update user list immediately
-    $ev_watch{update}->again();
+    $ev_watch{update}->set(0, $uw_config{update_interval});
 
     # our special destructor will initiate immediate reconnection
     $chan->{destructor} = \&_srv_disconnect;

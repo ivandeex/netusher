@@ -377,12 +377,6 @@ sub _ssl_read_pending ($) {
     my ($chan) = @_;
 
     #
-    # reset wait mode to read/write after first byte.
-    # ssl might need re-negotiation etc
-    #
-    fire_transmission($chan, &EV::READ | &EV::WRITE);
-
-    #
     # 16384 is the maximum amount read() can return.
     # Larger values allocate memory that can't be unused
     # as part of the buffer passed to read().
@@ -403,6 +397,12 @@ sub _ssl_read_pending ($) {
     #
     my $buf = Net::SSLeay::read($chan->{ssl}, $bytes);
     ssl_check_die("SSL read", "non-fatal");
+
+    # reset wait mode to read/write: ssl might need re-negotiation etc
+    change_event_mask($chan, &EV::READ | &EV::WRITE);
+
+    # check for short r/w timeout after first byte received
+    fire_transmission($chan);
 
     if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
         #debug("will read later: again=%s intr=%s nobufs=%s", $!{EAGAIN}, $!{EINTR}, $!{ENOBUFS});
