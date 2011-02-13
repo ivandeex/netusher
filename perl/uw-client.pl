@@ -1,6 +1,7 @@
 #!/usr/bin/perl
 #
-# UserWatch SSL client
+# UserWatch
+# Client daemon
 # $Id$
 #
 
@@ -9,6 +10,7 @@ use FindBin qw($Bin);
 require "$Bin/uw-common.inc.pm";
 require "$Bin/uw-ssl.inc.pm";
 require "$Bin/uw-cache.inc.pm";
+require "$Bin/uw-groups.inc.pm";
 
 #
 # require: perl-User-Utmp
@@ -21,9 +23,9 @@ use IO::Socket::UNIX;
 
 our ($config_file, $progname, %uw_config);
 our ($ev_loop, %ev_watch, $ev_reload);
+our (%local_users);
 my  ($srv_chan, @jobs, $finished);
 my  ($reconnect_pending, $reconnect_fast);
-my  (%local_users, $passwd_modified_stamp);
 my  ($unix_seqno);
 
 our %cache_backend = (
@@ -193,28 +195,6 @@ sub get_ip_list () {
     my $kid = waitpid($pid, 0);
     debug("ip_list: %s", join(',', @ip_list));
     return @ip_list;
-}
-
-#
-# get list of local user names from /etc/passwd
-#
-sub get_local_users () {
-    # check whether file was modified
-    my $passwd_path = "/etc/passwd";
-    my $modified = -M($passwd_path);
-    return if $modified eq $passwd_modified_stamp;
-    $passwd_modified_stamp = $modified;
-
-    # if the file was modified, refresh the hash
-    debug("updating local user list");
-    %local_users = ();
-    open(my $passwd, $passwd_path)
-        or fail("$passwd_path: cannot open");
-    while (<$passwd>) {
-        next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):\d+:";
-        $local_users{$1} = $2;
-    }
-    close($passwd);
 }
 
 #

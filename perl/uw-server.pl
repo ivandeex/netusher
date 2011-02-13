@@ -1,6 +1,7 @@
 #!/usr/bin/perl
 #
-# UserWatch SSL server
+# UserWatch
+# Server daemon
 # $Id$
 #
 
