@@ -96,8 +96,7 @@ sub _unix_read_pending ($) {
 
     if ($chan->{r_buf} !~ /\n/) {
         if ($len) {
-            debug("%s: read %s bytes",
-                    $chan->{addr}, defined($len) ? $len : "?");
+            #debug("%s: read %s bytes", $chan->{addr}, defined($len) ? $len : "?");
             postpone_timeouts($chan);
         } else {
             info("%s: read failed: %s", $chan->{addr}, $!);
@@ -108,7 +107,7 @@ sub _unix_read_pending ($) {
 
     end_transmission($chan);
     chomp($chan->{r_buf});
-    debug("received from %s: \"%s\"", $chan->{addr}, $chan->{r_buf});
+    #debug("received from %s: \"%s\"", $chan->{addr}, $chan->{r_buf});
     my $reply = handle_unix_request($chan, $chan->{r_buf});
     unix_write_reply($chan, $reply) if defined $reply;
 }
@@ -130,7 +129,7 @@ sub _unix_write_pending ($) {
         return;
     }
 
-    debug("%s: write %s bytes", $chan->{addr}, defined($len) ? $len : "?");
+    #debug("%s: write %s bytes", $chan->{addr}, defined($len) ? $len : "?");
     unless ($len) {
         info("%s: write failed: %s", $chan->{addr}, $!);
         ev_close($chan);

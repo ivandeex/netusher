@@ -434,7 +434,7 @@ sub _ssl_read_pending ($) {
         my $body = $chan->{r_body};
         if ($body =~ /\n$/) {
             chomp $body;
-            debug("%s: received \"%s\"", $chan->{addr}, $body);
+            #debug("%s: received \"%s\"", $chan->{addr}, $body);
             end_transmission($chan);
             &$handler($chan, $body, $chan->{r_param});
             return;
@@ -473,7 +473,7 @@ sub ssl_write_packet ($$$$) {
     fail("packet too long") if $bytes >= 8192;
     $bytes += 6;
     my $head = sprintf('%04d:', $bytes);
-    debug("send packet:[${head}${buf}]");
+    #debug("send packet:[${head}${buf}]");
 
     $chan->{w_handler} = $handler;
     $chan->{w_param} = $param;
