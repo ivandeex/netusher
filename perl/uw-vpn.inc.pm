@@ -198,8 +198,12 @@ sub vpn_scan () {
             unlink($path);
             #debug("$path: event file removed");
         }
-        debug("handled %d vpn events", scalar(keys %messages))
-            if %messages;
+
+        if (%messages) {
+            debug("handled %d vpn events", scalar(keys %messages));
+            # make a short pause after event and let status file update
+            return;
+        }
     }
 
     #
