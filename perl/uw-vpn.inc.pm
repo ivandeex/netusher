@@ -348,7 +348,15 @@ sub vpn_disconnected ($%) {
 
     if (exists $vpn_session{$vpn_ip}) {
         info("vpn $vpn_ip disconnected ($msg)");
-        iptables_update($vpn_ip, 0, 0);
+        # real ip can be shared by several vpn addresses
+        # find if there are others using the same ip
+        my $real_ip = $vpn_session{$vpn_ip}{real_ip};
+        my $count = -1;
+        for my $ip (keys %vpn_session) {
+            $count++ if $vpn_session{$ip}{real_ip} eq $real_ip;
+        }
+        debug("$count vpn sessions still use real ip $real_ip");
+        iptables_update($vpn_ip, 0, $count);
         delete $vpn_session{$vpn_ip};
         $modified = 1;
     }
