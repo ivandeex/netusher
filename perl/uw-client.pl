@@ -12,13 +12,6 @@ require "$Bin/uw-ssl.inc.pm";
 require "$Bin/uw-cache.inc.pm";
 require "$Bin/uw-groups.inc.pm";
 
-#
-# require: perl-User-Utmp
-#
-# you can obtain perl-User-Utmp RPM from
-# http://rpm.vitki.net/pub/centos/5/i386/repoview/perl-User-Utmp.html
-#
-use User::Utmp qw(:constants :utmpx);
 use IO::Socket::UNIX;
 
 our ($config_file, $progname, %uw_config);
@@ -175,53 +168,6 @@ sub get_ip_list () {
     my $kid = waitpid($pid, 0);
     debug("ip_list: %s", join(',', @ip_list));
     return @ip_list;
-}
-
-#
-# get list of active users
-#
-sub get_active_users () {
-    get_local_users();
-    my @user_list;
-
-    # scan utmpx
-    for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx()) {
-        next unless $ut->{ut_type} == USER_PROCESS;
-        # filter out local users
-        my $user = $ut->{ut_user};
-        next if !$uw_config{also_local} && exists($local_users{$user});
-
-        # detect login methos
-        my $method;
-        my $id = $ut->{ut_id};
-        if ($id =~ m"^s/\d+$") { $method = "RSH" }
-        elsif ($id =~ m"^\d+$") { $method = "CON" }
-        elsif ($id =~ m"^:\d+(\.\d+)?$") { $method = "XDM" }
-        elsif ($id =~ m"^/\d+$") { $method = "XTY" }
-        elsif ($ut->{ut_addr}) { $method = "RSH" }
-        else { $method = "UNK" }
-
-        # detect user id
-        my $uid = "";
-        if (exists $local_users{$user}) {
-            $uid = $local_users{$user};
-        } else {
-            my ($xname, $xpass, $xuid) = getpwnam($user);
-            $uid = $xuid if defined $xuid;
-        }
-
-        my $u = {
-                beg_time => $ut->{ut_time},
-                method => $method,
-                user => $user,
-                uid => $uid,
-                };
-        push @user_list, $u;
-        debug("user_list next: user:%s uid:%s method:%s beg_time:%s",
-                $user, $uid, $method, $u->{beg_time});
-    }
-
-    return @user_list;
 }
 
 ##############################################
@@ -519,6 +465,7 @@ sub main_loop () {
                     port ca_cert peer_pem idle_timeout rw_timeout
                     also_local syslog stdout debug stacktrace daemonize
                     connect_interval update_interval auth_cache_ttl
+                    enable_gmirror gmirror_conf update_nscd nscd_pid_file
                 )],
                 # required programs
                 [ qw(
@@ -528,6 +475,7 @@ sub main_loop () {
 
     debug("setting up");
     ev_create_loop();
+    gmirror_init() if $uw_config{enable_gmirror};
 
     if (daemonize()) {
         # clone event loop in the child

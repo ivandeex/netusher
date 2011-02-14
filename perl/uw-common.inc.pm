@@ -55,6 +55,10 @@ our %uw_config =
         connect_interval => 5,
         unix_socket     => "$status_root/$progname.sock",
         auth_cache_ttl  => 0,
+        enable_gmirror  => 0,
+        gmirror_conf    => "$config_root/gmirror.conf",
+        update_nscd     => 1,
+        nscd_pid_file   => "/var/run/nscd/nscd.pid",
 
         # server parameters
         mysql_host      => "localhost",
@@ -371,14 +375,35 @@ sub end_daemon () {
     info("$progname finished");
 }
 
+sub add_temp_file ($) {
+    my ($temp) = @_;
+    $temp_files{$temp} = 1;
+}
+
+sub del_temp_file ($) {
+    my ($temp) = @_;
+    unlink($temp);
+    delete $temp_files{$temp};
+}
+
+#
+# run a program
+# returns -1 if program not found
+# returns -2 if program aborted
+#
 sub run_prog ($;$) {
     my ($cmd, $out_ref) = @_;
     my $kid;
+    my ($prog, @params) = split(/\s+/, $cmd);
+    unless (-x $prog) {
+        info("$prog: program not found");
+        return -1;
+    }
     if ($out_ref && 1) {
         $SIG{PIPE} = "IGNORE";
         my ($out, $file, $temp, $rs);
         $temp = "/tmp/xxx.$progname.run.".time().".$$";
-        $temp_files{$temp} = 1;
+        add_temp_file($temp);
         system("$cmd >$temp 2>&1");
         $kid = $?;
         open($file, $temp);
@@ -386,13 +411,12 @@ sub run_prog ($;$) {
         $out = <$file>; $$out_ref = $out; undef $out;
         $/ = $rs;
         close($file);
-        unlink($temp);
-        delete $temp_files{$temp};
+        del_temp_file($temp);
     } else {
         system("$cmd >/dev/null 2>&1");
         $kid = $?;
     }
-    my $ret = ($kid & 127) ? -255 : ($kid >> 8);
+    my $ret = ($kid & 127) ? -2 : ($kid >> 8);
     return $ret;
 }
 
