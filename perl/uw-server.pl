@@ -214,7 +214,7 @@ sub update_user_mapping ($$$) {
 
     unless (defined $best) {
         debug("ldap users not found");
-        iptables_update($vpn_ip, users_from_ip($vpn_ip));
+        iptables_update($vpn_ip, 1, users_from_ip($vpn_ip));
         return;
     }
 
@@ -260,7 +260,7 @@ sub update_user_mapping ($$$) {
     }
 
     mysql_commit();
-    iptables_update($vpn_ip);
+    iptables_update($vpn_ip, 1, users_from_ip($vpn_ip));
 }
 
 sub purge_expired_users () {
@@ -289,6 +289,7 @@ sub users_from_ip ($) {
                             $vpn_ip);
     my $count = mysql_fetch1($sth);
     $count = 0 unless $count;
+    debug("got $count active users from vpn:$vpn_ip");
     return $count;
 }
 
@@ -310,7 +311,8 @@ sub main_loop () {
                     ldap_attr_user ldap_attr_uid ldap_start_tls ldap_timeout
                     ldap_force_fork mysql_port uid_cache_ttl
                     user_retention purge_interval
-                    iptables_user_vpn iptables_user_real iptables_status
+                    iptables_user_vpn iptables_user_real
+                    iptables_host_real iptables_status
                     vpn_scan_interval vpn_cfg_mask vpn_status_file
                     vpn_event_dir vpn_event_mask vpn_archive_dir
             )],

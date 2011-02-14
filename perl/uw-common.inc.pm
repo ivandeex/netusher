@@ -87,6 +87,7 @@ our %uw_config =
         purge_interval  => 300,
         iptables_user_vpn   => '',
         iptables_user_real  => '',
+        iptables_host_real  => '',
         iptables_status     => "$status_root/$progname.iptables",
 
         # end of parameters
