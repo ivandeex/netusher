@@ -21,8 +21,10 @@ our ($vpn_regex);
 # iptables control
 #
 
-my ($chains_enable, %chains_ips, %chains_extra);
-my (%chains_vpn, %chains_real, %chains_all);
+use constant CHAIN_VPN  => 1;
+use constant CHAIN_REAL => 2;
+
+my ($chains_enable, %chains_all, %chains_ips, %chains_extra);
 my ($iptables_fail_num, $iptables_fail_log);
 
 sub iptables_update ($) {
@@ -35,16 +37,14 @@ sub iptables_update ($) {
     my ($chain, $changed);
     if ($active) {
         # enable
-        if ($vpn_ip) {
-            for $chain (keys %chains_vpn) {
+        for $chain (keys %chains_all) {
+            if ($vpn_ip && chain_is_mode($chain, CHAIN_VPN)) {
                 if (!$chains_ips{$chain}{$vpn_ip}) {
                     enable_ip($chain, $vpn_ip, 1, 0);
                     $changed = 1;
                 }
             }
-        }
-        if ($real_ip) {
-            for $chain (keys %chains_real) {
+            if ($real_ip && chain_is_mode($chain, CHAIN_REAL)) {
                 if (!$chains_ips{$chain}{$real_ip}) {
                     enable_ip($chain, $real_ip, 1, 0);
                     $changed = 1;
@@ -53,16 +53,14 @@ sub iptables_update ($) {
         }
     } else {
         # disable
-        if ($vpn_ip) {
-            for $chain (keys %chains_vpn) {
+        for $chain (keys %chains_all) {
+            if ($vpn_ip && chain_is_mode($chain, CHAIN_VPN)) {
                 if ($chains_ips{$chain}{$vpn_ip}) {
                     enable_ip($chain, $vpn_ip, 0, 0);
                     $changed = 1;
                 }
             }
-        }
-        if ($real_ip) {
-            for $chain (keys %chains_real) {
+            if ($real_ip && chain_is_mode($chain, CHAIN_REAL)) {
                 if ($chains_ips{$chain}{$real_ip}) {
                     enable_ip($chain, $real_ip, 0, 0);
                     $changed = 1;
@@ -104,10 +102,10 @@ sub iptables_init () {
     iptables_close();
 
     # setup chain names
-    $chains_all{$_} = $chains_vpn{$_} = 1
-        for (split /\s+/, $uw_config{iptables_vpn});
-    $chains_all{$_} = $chains_real{$_} = 1
-        for (split /\s+/, $uw_config{iptables_real});
+    $chains_all{$_} |= CHAIN_VPN
+        for (split /\s+/, $uw_config{iptables_user_vpn});
+    $chains_all{$_} |= CHAIN_REAL
+        for (split /\s+/, $uw_config{iptables_user_real});
     $chains_enable = (%chains_all ? 1 : 0);
     return unless $chains_enable;
 
@@ -126,8 +124,6 @@ sub iptables_close () {
     $chains_enable = 0;
     %chains_ips = ();
     %chains_extra = ();
-    %chains_vpn = ();
-    %chains_real = ();
     %chains_all = ();
     $iptables_fail_num = 0;
     $iptables_fail_log = "";
@@ -185,12 +181,12 @@ sub iptables_rescan () {
             if ($line =~ /^-A (\S+) -s ([\w\d\.\:]+) -j ACCEPT$/) {
                 my ($chain, $ip) = ($1, $2);
                 my $is_vpn = ($ip =~ $vpn_regex) ? 1 : 0;
-                if ($chains_vpn{$chain} && $is_vpn) {
+                if ($is_vpn && chain_is_mode($chain, CHAIN_VPN)) {
                     $chains_ips{$chain}{$ip} = $source;
                     debug("ip scan source $source chain $chain vpn: $ip");
                     next;
                 }
-                if ($chains_real{$chain} && !$is_vpn) {
+                if (!$is_vpn && chain_is_mode($chain, CHAIN_REAL)) {
                     $chains_ips{$chain}{$ip} = $source;
                     debug("ip scan source:$source chain:$chain real: $ip");
                     next;
@@ -351,6 +347,12 @@ sub run_iptables ($$) {
     }
     debug("$iptables ($ret) \"$cmd\"");
     return $ret;
+}
+
+sub chain_is_mode ($$) {
+    my ($chain, $mode) = @_;
+    return (defined($chains_all{$chain})
+            && (($chains_all{$chain} & $mode) == $mode));
 }
 
 ##############################################

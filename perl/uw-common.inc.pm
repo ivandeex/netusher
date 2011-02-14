@@ -79,9 +79,9 @@ our %uw_config =
         uid_cache_ttl   => 2,
         user_retention  => 300,
         purge_interval  => 300,
-        iptables_vpn    => '',
-        iptables_real   => '',
-        iptables_status => "$status_root/$progname.iptables",
+        iptables_user_vpn   => '',
+        iptables_user_real  => '',
+        iptables_status     => "$status_root/$progname.iptables",
 
         # end of parameters
     );

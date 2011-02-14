@@ -311,7 +311,7 @@ sub main_loop () {
                     ldap_attr_user ldap_attr_uid ldap_start_tls ldap_timeout
                     ldap_force_fork mysql_port uid_cache_ttl
                     user_retention purge_interval
-                    iptables_vpn iptables_real iptables_status
+                    iptables_user_vpn iptables_user_real iptables_status
                 )],
                 # required programs
                 [ qw(
