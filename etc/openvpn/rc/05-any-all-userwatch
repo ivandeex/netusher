@@ -1,4 +1,4 @@
 #!/bin/sh
 [ x"$RC_ACTION" = x"cron" ] && exit
-env | sort > $RC_VAR/userwatch.cmd.`date '+%Y%m%d_%H%M%S_%N'` 2>/dev/null
+env | sort > $RC_VAR/userwatch.event.`date '+%Y%m%d_%H%M%S_%N'` 2>/dev/null
 kill -USR2 `cat /var/run/userwatch/uw-server.pid 2>/dev/null` 2>/dev/null
