@@ -20,7 +20,8 @@ our (%uw_config, $progname, %ev_watch, $ev_loop);
 # interaction with openvpn
 #
 
-our ($vpn_regex, %vpn_to_real);
+our ($vpn_regex);
+my  (%vpn_session);
 
 
 sub vpn_init () {
@@ -62,10 +63,29 @@ sub vpn_init () {
         #
         # setup vpn ip mapping 
         #
-        my $sth = mysql_execute(
-                "SELECT vpn_ip, real_ip FROM uw_openvpn WHERE running = 1");
+        my $sth = mysql_execute("SELECT vpn_ip, real_ip, UNIX_TIMESTAMP(beg_time)
+                                FROM uw_openvpn WHERE running = 1");
+        my @purge;
         while (my @row = $sth->fetchrow_array) {
-            $vpn_to_real{ $row[0] } = $row[1];
+            my ($vpn_ip, $real_ip, $beg_time) = @row;
+            if (exists($vpn_session{$vpn_ip})
+                    && $vpn_session{$vpn_ip}{beg_time} != $beg_time) {
+                if ($beg_time < $vpn_session{$vpn_ip}{beg_time}) {
+                    push @purge, [ $vpn_ip, $beg_time ];
+                    next;
+                } else {
+                    push @purge, [ $vpn_ip, $vpn_session{$vpn_ip}{beg_time} ];
+                }
+            }
+            $vpn_session{$vpn_ip}{real_ip} = $real_ip;
+            $vpn_session{$vpn_ip}{beg_time} = $beg_time;
+        }
+
+        # purge stale old sessions
+        for my $ip_time (@purge) {
+            mysql_execute("UPDATE uw_openvpn SET running = 0
+                            WHERE beg_time = FROM_UNIXTIME(?) AND vpn_ip = ?",
+                        $ip_time->[0], $ip_time->[1]);
         }
     }
 }
@@ -73,15 +93,13 @@ sub vpn_init () {
 sub vpn_close () {
     delete $ev_watch{vpn_scan_timer};
     delete $ev_watch{vpn_scan_signal};
-    %vpn_to_real = ();
+    %vpn_session = ();
 }
 
 #
 # periodic scan of openvpn status
 #
 sub vpn_scan () {
-    debug("rescan vpn");
-
     #
     # scan and read all messages
     #
@@ -91,7 +109,7 @@ sub vpn_scan () {
         my $path_mask = $uw_config{vpn_event_dir}."/".$uw_config{vpn_event_mask};
         my $arch_dir = $uw_config{vpn_archive_dir};
 
-        # pick up all messages
+        # pick up all events from openvpn
         for my $path (glob $path_mask) {
             if (open(my $file, $path)) {
                 my $msg = {};
@@ -104,10 +122,11 @@ sub vpn_scan () {
                 $msg->{cmd_path} = $path;
                 if ($msg->{time_unix}) {
                     $messages{ $msg->{time_unix} } = $msg;
+                    #debug("$path: new vpn event");
                     next;
                 }
             }
-            info("$path: broken openvpn event");
+            info("$path: broken vpn event");
         }
 
         # handle gathered messages ordered by time
@@ -118,7 +137,7 @@ sub vpn_scan () {
             my $vpn_ip = $msg->{ifconfig_pool_remote_ip};
             my $beg_time = $msg->{time_unix};
             undef $beg_time if $beg_time !~ /^\d+/;
-            debug("$path: next openvpn event");
+            debug("$path: next vpn event:$event vpn:$vpn_ip time:$beg_time");
 
             if ($cfg_mask && $msg->{config} !~ m/$cfg_mask/) {
                 info("%s: foreign vpn event (%s)",
@@ -127,17 +146,16 @@ sub vpn_scan () {
             elsif ($event eq "client-connect") {
                 if ($vpn_ip && $beg_time) {
                     vpn_connected(
+                        "event",
                         vpn_ip      => $vpn_ip,
                         beg_time    => $beg_time,
                         end_time    => $beg_time,
                         cname       => $msg->{common_name},
                         real_ip     => $msg->{trusted_ip},
-                        real_port   => $msg->{trusted_port},
-                        rx_bytes    => 0,
-                        tx_bytes    => 0
+                        real_port   => $msg->{trusted_port}
                         );
                 } else {
-                    debug("$path: invalid openvpn event without IP & time");
+                    debug("$path: invalid vpn event without IP & time");
                 }
             }
             elsif ($event eq "client-disconnect") {
@@ -146,6 +164,7 @@ sub vpn_scan () {
                                     ? $beg_time + $msg->{time_duration}
                                     : undef;
                     vpn_disconnected(
+                        "event",
                         vpn_ip      => $vpn_ip,
                         beg_time    => $beg_time,
                         end_time    => $end_time,
@@ -153,30 +172,34 @@ sub vpn_scan () {
                         tx_bytes    => $msg->{bytes_sent}
                         );
                 } else {
-                    debug("$path: invalid openvpn event without IP");
+                    debug("$path: invalid vpn event without IP");
                 }
             }
             else {
-                info("%s: unknown openvpn event \"%s\"",
+                info("%s: unknown vpn event \"%s\"",
                     $msg->{cmd_path}, $event);
             }
 
             # archive for debugging
             if ($arch_dir) {
-                $path =~ s!^.*/!!g;
-                $path = "$arch_dir/$path";
-                if (open(my $file, "> $path")) {
+                (my $arch = $path) =~ s!^.*/!!g;
+                $arch = "$arch_dir/$arch";
+                if (open(my $file, "> $arch")) {
                     print $file $_."=".$msg->{$_}."\n"
                         for (sort keys %$msg);
                     close($file);
+                    #debug("$arch: archive created");
                 } else {
-                    info("$path: cannot write archive");
+                    info("$arch: cannot write archive");
                 }
             }
 
-            # remove command file
-            unlink($msg->{cmd_path});
+            # remove event file
+            unlink($path);
+            #debug("$path: event file removed");
         }
+        debug("handled %d vpn events", scalar(keys %messages))
+            if %messages;
     }
 
     #
@@ -184,18 +207,20 @@ sub vpn_scan () {
     #
     if ($uw_config{vpn_status_file}) {
         my $path = $uw_config{vpn_status_file};
+
         if (open(my $file, $path)) {
             my %active;
             while(<$file>) {
-                chomp;
+                chomp(my $line = $_);
                 my ($tag, $cname, $real_ip_port, $vpn_ip,
-                    $rx_bytes, $tx_bytes, $beg_iso, $beg_unix)
-                    = split /,/;
+                    $rx_bytes, $tx_bytes, $beg_iso, $beg_time)
+                    = split /,/, $line;
                 next if $tag ne "CLIENT_LIST";
                 my ($real_ip, $real_port) = split /:/, $real_ip_port;
 
-                if (!$vpn_ip || !$beg_unix || $beg_unix !~ /^\d+/) {
-                    debug("invalid openvpn status line without IP & time");
+                if (!$vpn_ip || !$beg_time || $beg_time !~ /^\d+/) {
+                    debug("invalid vpn status line without IP/time: \"$line\"")
+                        if $cname ne "UNDEF";
                     next;
                 }
                 if (!$cname || $cname eq "UNDEF") {
@@ -203,25 +228,30 @@ sub vpn_scan () {
                     undef $cname;
                 }
 
-                vpn_connected(
+                my $modified = vpn_connected(
+                    "status",
                     vpn_ip      => $vpn_ip,
-                    beg_time    => $beg_unix,
-                    end_time    => $beg_unix,
+                    beg_time    => $beg_time,
+                    end_time    => undef,
                     cname       => $cname,
                     real_ip     => $real_ip,
                     real_port   => $real_port,
                     rx_bytes    => $rx_bytes,
                     tx_bytes    => $tx_bytes
                     );
+                debug("vpn status line was: \"$line\"") if $modified;
+
                 $active{$vpn_ip} = 1;
             }
             close($file);
 
             # everyone beyond the list should be marked disconnected
-            for my $vpn_ip (sort keys %vpn_to_real) {
+            for my $vpn_ip (sort keys %vpn_session) {
                 if (!$active{$vpn_ip}) {
                     vpn_disconnected(
-                        vpn_ip => $vpn_ip
+                        "status",
+                        vpn_ip      => $vpn_ip,
+                        beg_time    => $vpn_session{$vpn_ip}{beg_time}
                         );
                 }
             }
@@ -236,33 +266,50 @@ sub vpn_scan () {
 # required fields: vpn_ip, beg_time
 # optional fields: end_time, cname, real_ip, real_port, rx_bytes, tx_bytes
 #
-sub vpn_connected (%) {
-    my (%arg) = @_;
+sub vpn_connected ($%) {
+    my ($msg, %arg) = @_;
+    my ($vpn_ip, $beg_time) = ($arg{vpn_ip}, $arg{beg_time});
     $arg{cname} =~ s/^client-//;
+    my $modified = 0;
 
     # remove previous sessions, if any
-    mysql_execute("
+    if (exists($vpn_session{$vpn_ip})
+            && $vpn_session{$vpn_ip}{beg_time} ne $beg_time) {
+        debug("purge previous vpn session vpn:$vpn_ip ($msg)");
+        mysql_execute("
             UPDATE uw_openvpn SET running = 0, end_time = FROM_UNIXTIME(?)
-            WHERE beg_time < FROM_UNIXTIME(?) AND vpn_ip = ? AND RUNNING = 1",
+            WHERE beg_time < FROM_UNIXTIME(?) AND vpn_ip = ? AND running = 1",
             $arg{beg_time} - 1, $arg{beg_time}, $arg{vpn_ip});
+        delete $vpn_session{$vpn_ip};
+    }
 
-    # start or update new session
-    mysql_execute("
-            INSERT INTO uw_openvpn
-                (vpn_ip,beg_time,end_time,
-                running,cname,real_ip,real_port,rx_bytes,tx_bytes)
-                VALUES (FROM_UNIXTIME(?),ISNULL(FROM_UNIXTIME(?),NOW()),
-                        1,?,?,?,?,?,?)
-            ON DUPLICATE KEY UPDATE
-                end_time=ISNULL(FROM_UNIXTIME(?),NOW()),
-                running=1, cname=ISNULL(?,cname), rx_bytes=?, tx_bytes=?",
-            $arg{vpn_ip}, $arg{beg_time}, $arg{end_time},
-            $arg{cname}, $arg{real_ip}, $arg{real_port},
-            $arg{rx_bytes}, $arg{tx_bytes},
-            $arg{end_time}, $arg{cname}, $arg{rx_bytes}, $arg{tx_bytes});
+    if (exists $vpn_session{$vpn_ip}) {
+        # prolong existsing session
+        mysql_execute("
+            UPDATE uw_openvpn SET end_time = IFNULL(FROM_UNIXTIME(?),NOW()),
+                running=1, cname = IFNULL(?,cname),
+                rx_bytes = IFNULL(?,rx_bytes), tx_bytes = IFNULL(?,tx_bytes)
+            WHERE vpn_ip = ? AND beg_time = FROM_UNIXTIME(?)",
+            $arg{end_time}, $arg{cname}, $arg{rx_bytes}, $arg{tx_bytes},
+            $vpn_ip, $beg_time);
+    } else {
+        # create new session
+        mysql_execute("
+            INSERT INTO uw_openvpn (vpn_ip,beg_time,end_time,
+                running,cname, real_ip,real_port,rx_bytes,tx_bytes)
+            VALUES (?, FROM_UNIXTIME(?), IFNULL(FROM_UNIXTIME(?),NOW()),
+                1,?, ?,?,?,?)",
+            $vpn_ip, $beg_time, $arg{end_time},  $arg{cname},
+            $arg{real_ip}, $arg{real_port}, $arg{rx_bytes}, $arg{tx_bytes});
 
-    $vpn_to_real{ $arg{vpn_ip} } = $arg{real_ip};
-    info("vpn %s connected", $arg{vpn_ip});
+        info("vpn $vpn_ip connected ($msg)");
+        $vpn_session{$vpn_ip}{beg_time} = $beg_time;
+        $vpn_session{$vpn_ip}{real_ip} = $arg{real_ip};
+        $modified = 1;
+    }
+
+    mysql_commit();
+    return $modified;
 }
 
 #
@@ -270,21 +317,35 @@ sub vpn_connected (%) {
 # required fields: vpn_ip
 # optional fields: beg_time, end_time, rx_bytes, tx_bytes
 #
-sub vpn_disconnected (%) {
-    my (%arg) = @_;
+sub vpn_disconnected ($%) {
+    my ($msg, %arg) = @_;
+    my ($vpn_ip, $beg_time) = ($arg{vpn_ip}, $arg{beg_time});
     $arg{cname} =~ s/^client-//;
+    my $modified = 0;
+
+    if ($beg_time && exists($vpn_session{$vpn_ip})
+            && $vpn_session{$vpn_ip}{beg_time} ne $beg_time) {
+        info("ignoring stale disconnect vpn:$vpn_ip ($msg)");
+        return 0;
+    }
 
     mysql_execute("UPDATE uw_openvpn SET running = 0,
-                    end_time = ISNULL(FROM_UNIXTIME(?),end_time),
-                    rx_bytes = ISNULL(?,rx_bytes),
-                    tx_bytes = ISNULL(?,tx_bytes)
-                WHERE RUNNING = 1 AND vpn_ip = ?
+                    end_time = IFNULL(FROM_UNIXTIME(?),end_time),
+                    rx_bytes = IFNULL(?,rx_bytes),
+                    tx_bytes = IFNULL(?,tx_bytes)
+                WHERE running = 1 AND vpn_ip = ?
                 AND   (? IS NULL OR beg_time = FROM_UNIXTIME(?))",
                 $arg{end_time}, $arg{rx_bytes}, $arg{tx_bytes},
-                $arg{vpn_ip}, $arg{beg_time}, $arg{beg_time});
+                $vpn_ip, $beg_time, $beg_time);
+    mysql_commit();
 
-    delete $vpn_to_real{ $arg{vpn_ip} };
-    info("vpn %s disconnected", $arg{vpn_ip});
+    if (exists $vpn_session{$vpn_ip}) {
+        info("vpn $vpn_ip disconnected ($msg)");
+        delete $vpn_session{$vpn_ip};
+        $modified = 1;
+    }
+
+    return $modified;
 }
 
 ##############################################
@@ -301,7 +362,9 @@ sub iptables_update ($) {
     my ($vpn_ip) = @_;
     return unless $chains_enable;
     my $active = users_from_ip($vpn_ip);
-    my $real_ip = get_real_ip($vpn_ip);
+    my $real_ip;
+    $real_ip = $vpn_session{$vpn_ip}{real_ip}
+        if exists $vpn_session{$vpn_ip};
     debug("got $active active users from vpn:$vpn_ip real:$real_ip");
 
     my ($chain, $changed);
@@ -344,17 +407,6 @@ sub iptables_update ($) {
         debug("iptables: enable:%s vpn:%s real:%s ",
                 $active, $vpn_ip, $real_ip);
     }
-}
-
-sub get_real_ip ($) {
-    my ($vpn_ip) = @_;
-    return unless $vpn_ip;
-    my $sth = mysql_execute("SELECT real_ip FROM uw_openvpn
-                            WHERE running = 1 AND vpn_ip = ?
-                            LIMIT 1",
-                            $vpn_ip);
-    my $real_ip = mysql_fetch1($sth);
-    return $real_ip;
 }
 
 sub enable_ip ($$$$) {
@@ -670,9 +722,10 @@ sub mysql_execute ($@) {
         info("mysql error: %s\n", $sth->errstr());
         $num = -1;
     }
-    debug("execute: %s\n\t((%s)) = \"%s\"", $sql,
-         join(',', map { defined($_) ? "\"$_\"" : "NULL" } @params),
-         $num);
+    if ($uw_config{debug} & 2) {
+        debug("execute: %s\n\t((%s)) = \"$num\"", $sql,
+             join(',', map { defined($_) ? "\"$_\"" : "NULL" } @params));
+    }
     return $sth;
 }
 
