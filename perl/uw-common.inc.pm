@@ -67,6 +67,12 @@ our %uw_config =
         mysql_user      => undef,
         mysql_pass      => undef,
         vpn_net         => undef,
+        vpn_scan_interval   => 0,
+        vpn_status_file     => undef,
+        vpn_cfg_mask        => undef,
+        vpn_event_dir       => undef,
+        vpn_event_mask      => "userwatch.event.*",
+        vpn_archive_dir     => undef,
         ldap_uri        => undef,
         ldap_bind_dn    => undef,
         ldap_bind_pass  => undef,
@@ -106,7 +112,7 @@ sub read_config ($$$$) {
                 next;
             }
         }
-        fail("$config: configuration error in line $.");
+        fail("$config: configuration syntax error in line $.");
     }
     close ($file);
 
@@ -361,10 +367,17 @@ sub detach_stdio () {
 
 sub create_parent_dir ($) {
     my ($path) = @_;
-    (my $dir = $path) =~ s!/+[^/]*$!!;
-    mkdir($dir);
-    (-d $dir) or fail("$dir: directory does not exist");
-    (-w $dir) or fail("$dir: directory is not writable");
+    (my $parent = $path) =~ s!/+[^/]*$!!;
+    fail("$parent: path must be absolute") if $parent !~ m!^/!;
+    my @dirs;
+    for (my $dir = $parent; length($dir) > 1; $dir =~ s!/+[^/]*$!!) {
+        unshift @dirs, $dir;
+    }
+    for my $dir (@dirs) {
+        mkdir($dir) unless -d $dir;
+    }
+    (-d $parent) or fail("$parent: directory does not exist");
+    (-w $parent) or fail("$parent: directory is not writable");
 }
 
 sub end_daemon () {

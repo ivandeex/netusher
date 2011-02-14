@@ -21,7 +21,6 @@ use EV;
 our ($config_file, $progname, %uw_config);
 our ($ev_loop, %ev_watch, $ev_reload);
 our ($ldap_child);
-
 our ($vpn_regex);
 
 our %cache_backend = (
@@ -312,26 +311,20 @@ sub main_loop () {
                     ldap_force_fork mysql_port uid_cache_ttl
                     user_retention purge_interval
                     iptables_user_vpn iptables_user_real iptables_status
-                )],
+                    vpn_scan_interval vpn_cfg_mask vpn_status_file
+                    vpn_event_dir vpn_event_mask vpn_archive_dir
+            )],
                 # required programs
                 [ qw(
                     iptables
                 )]);
     log_init();
 
-    # create regular expression for vpn network
-    $vpn_regex = $uw_config{vpn_net};
-    fail("vpn_net: invalid format \"$vpn_regex\", shall be A.B.C.0")
-        if $vpn_regex !~ /^[1-9]\d{1,2}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-    $vpn_regex =~ s/(\.0+)+$//;
-    $vpn_regex .= ".";
-    $vpn_regex =~ s/\./\\./g;
-    $vpn_regex = qr[$vpn_regex];
-
     debug("setting up");
     ldap_init(1);
     mysql_connect();
     ev_create_loop();
+    vpn_init();
     iptables_init();
 
     if (daemonize()) {
@@ -404,6 +397,7 @@ sub cleanup () {
     ev_close_all();
     ssl_destroy_context();
     ldap_close();
+    vpn_close();
     unless ($ldap_child) {
         ev_remove_handlers();
         # disconnecting from mysql in a child process screws up parent
