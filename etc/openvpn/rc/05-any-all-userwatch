@@ -1,0 +1,2 @@
+#!/bin/sh
+env | sort > $RC_VAR/userwatch.cmd.`date '+%Y%m%d_%H%M%S_%N'` 2>/dev/null
