@@ -313,7 +313,8 @@ sub main_loop () {
                     user_retention purge_interval
                     iptables_user_vpn iptables_user_real
                     iptables_host_real iptables_status
-                    vpn_scan_interval vpn_cfg_mask vpn_status_file
+                    vpn_scan_interval vpn_scan_pause
+                    vpn_cfg_mask vpn_status_file
                     vpn_event_dir vpn_event_mask vpn_archive_dir
             )],
                 # required programs

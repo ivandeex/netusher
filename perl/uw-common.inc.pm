@@ -68,6 +68,7 @@ our %uw_config =
         mysql_pass      => undef,
         vpn_net         => undef,
         vpn_scan_interval   => 0,
+        vpn_scan_pause      => 3,
         vpn_status_file     => undef,
         vpn_cfg_mask        => undef,
         vpn_event_dir       => undef,

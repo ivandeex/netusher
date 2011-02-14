@@ -202,6 +202,8 @@ sub vpn_scan () {
         if (%messages) {
             debug("handled %d vpn events", scalar(keys %messages));
             # make a short pause after event and let status file update
+            $ev_watch{vpn_scan_timer}->set($uw_config{vpn_scan_pause},
+                                            $uw_config{vpn_scan_interval});
             return;
         }
     }
