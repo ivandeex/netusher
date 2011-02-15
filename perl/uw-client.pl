@@ -20,6 +20,7 @@ our (%local_users);
 my  ($srv_chan, @jobs, $finished);
 my  ($reconnect_pending, $reconnect_fast);
 my  ($unix_seqno);
+my  $opt_gmirror = 0;
 
 our %cache_backend = (
         );
@@ -67,7 +68,7 @@ sub update_active_users ($) {
     debug("update active users");
     return "no connection" unless $srv_chan;
     get_local_users();
-    my $req = create_request("C", 1, undef, undef);
+    my $req = create_request("C", undef, undef, &OPT_USER_LIST | $opt_gmirror);
     queue_job($req, $chan);
     # return nothing for channel to wait for server reply
     return;
@@ -80,9 +81,13 @@ sub user_login ($$$$$) {
         debug("$user: local user login");
         return "OK";
     }
-    my $req = create_request("I", 0, time(), {
-                method => $method, user => $user, pass => $pass, uid => $uid
-                });
+    my $usr = {
+        method => $method,
+        user => $user,
+        pass => $pass,
+        uid => $uid
+        };
+    my $req = create_request("I", time(), $usr, $opt_gmirror);
     if (check_auth_cache($user, $uid, $pass) == 0) {
         info("$user: user login: OK (cached)");
         queue_job($req, undef);
@@ -112,9 +117,8 @@ sub user_logout ($$$) {
         }
     }
 
-    my $req = create_request("O", 0, undef, {
-                method => $method, user => $user, uid => ""
-                });
+    my $usr = { method => $method, user => $user, uid => "" };
+    my $req = create_request("O", undef, $usr,  0);
     queue_job($req, $chan, message => "$user: user logout");
     # return nothing for channel to wait for server reply
     return;
@@ -124,23 +128,23 @@ sub user_logout ($$$) {
 # make the request packet
 #
 sub create_request ($$$$) {
-    my ($cmd, $get_list, $time, $usr) = @_;
+    my ($cmd, $time, $usr, $opts) = @_;
 
-    my $line = sprintf('%s:%s:', $cmd, $time);
+    my $line = sprintf("%s:%s:%s:", $cmd, $opts, $time);
 
     $usr = {} unless defined $usr;
-    $line .= sprintf('%s:%s:%s:%s', $usr->{method}, $usr->{user},
+    $line .= sprintf("%s:%s:%s:%s", $usr->{method}, $usr->{user},
                                     $usr->{uid}, $usr->{pass});
 
     my @ip_list = get_ip_list();
-    $line .= ":~:" . sprintf('%03d:', $#ip_list + 1)
+    $line .= ":~:" . sprintf("%03d:", $#ip_list + 1)
             . join(':', @ip_list) . ":~:";
 
-    if ($get_list) {
+    if (&OPT_USER_LIST & $opts) {
         my (@user_list) = get_active_users();
-        $line .= sprintf('%03d', $#user_list + 1);
+        $line .= sprintf("%03d", $#user_list + 1);
         for my $u (@user_list) {
-            $line .= sprintf(':%09d:%3s:%s:%s:/',
+            $line .= sprintf(":%09d:%3s:%s:%s:/",
                             $u->{beg_time}, $u->{method},
                             $u->{user}, $u->{uid});
         }
@@ -318,8 +322,14 @@ sub _srv_read_done ($$$) {
     }
 
     debug("%s: got reply \"%s\" for %s", $chan->{addr}, $reply, $job->{source});
-    unix_write_reply($job->{chan}, $reply) if $job->{chan};
-    handle_reply($job, $job->{params}, $reply) if $job->{params};
+    my @parts = split /:/, $reply;
+    $reply = shift @parts;
+    unix_write_reply($job->{chan}, $reply)
+        if $job->{chan};
+    handle_gmirror_reply($job, $reply, \@parts)
+        if @parts && $uw_config{enable_gmirror};
+    handle_reply($job, $job->{params}, $reply)
+        if $job->{params};
     undef $job;
     handle_next_job();
 }
@@ -475,7 +485,11 @@ sub main_loop () {
 
     debug("setting up");
     ev_create_loop();
-    gmirror_init() if $uw_config{enable_gmirror};
+
+    if ($uw_config{enable_gmirror}) {
+        gmirror_init();
+        $opt_gmirror = &OPT_GET_GROUPS;
+    }
 
     if (daemonize()) {
         # clone event loop in the child

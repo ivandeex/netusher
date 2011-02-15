@@ -283,7 +283,7 @@ sub _ldap_init ($) {
 sub _ldap_connect ($$$$) {
     my ($bind_dn, $user, $pass, $just_check) = @_;
 
-    debug("connecting to ldap uri:%s", $uw_config{ldap_uri});
+    #debug("connecting to ldap uri:%s", $uw_config{ldap_uri});
     my $conn = Net::LDAP->new($uw_config{ldap_uri},
                                 timeout => $uw_config{ldap_timeout},
                                 version => 3)
@@ -305,9 +305,9 @@ sub _ldap_connect ($$$$) {
     my $error = 0;
     $error = "server down" unless $res;
     $error = $res->error() if $res && $res->code();
-    debug("ldap auth uri:%s tls:%s bind:%s pass:%s error:%s",
+    debug("ldap uri:%s tls:%s bind:%s err:%s",
             $uw_config{ldap_uri}, $uw_config{ldap_start_tls},
-            $bind_dn, $pass, $res->error());
+            $bind_dn, $res->error());
     $error = "invalid password" if $error && $user;
     undef $conn if $error;
 

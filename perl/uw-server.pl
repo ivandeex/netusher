@@ -48,7 +48,7 @@ my $min_login_weight = 4;
 #
 # parse request string.
 #
-sub parse_req ($) {
+sub parse_request ($) {
     my ($str) = @_;
 
     # typical request:
@@ -56,21 +56,22 @@ sub parse_req ($) {
 
     my @arr = split /:/, $str;
     #debug("arr: %s", join(',', map { "$_=$arr[$_]" } (0 .. $#arr)));
-    return "invalid array delimiters"
-        if $arr[6] ne '~' || $arr[$#arr] ne "~" || $arr[$arr[7] + 8] ne "~";
+    return "invalid delimiters"
+        if $arr[7] ne '~' || $arr[$#arr] ne "~" || $arr[$arr[8] + 9] ne "~";
 
     # command
     my $cmd = $arr[0];
     return "invalid command"
         if length($cmd) != 1 || index("IOC", $cmd) < 0;
+    my $opts = $arr[1];
 
     # logon user
     my $usr = {
-            beg_time => $arr[1],
-            method => $arr[2],
-            user => $arr[3],
-            uid => $arr[4],
-            pass => $arr[5]
+            beg_time => $arr[2],
+            method => $arr[3],
+            user => $arr[4],
+            uid => $arr[5],
+            pass => $arr[6]
             };
     return "invalid begin time"
         if $usr->{beg_time} ne "" && $usr->{beg_time} !~ /^\d+$/;
@@ -79,7 +80,7 @@ sub parse_req ($) {
 
     # parse IP list
     my @ips;
-    for (my $i = 8; $i < $arr[7] + 8; $i++) {
+    for (my $i = 9; $i < $arr[8] + 9; $i++) {
         return "invalid ip"
             if $arr[$i] !~ /^[1-9]\d{1,2}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
         push @ips, $arr[$i];
@@ -87,11 +88,13 @@ sub parse_req ($) {
 
     # create user list
     my @users;
-    my $beg_idx = $arr[7] + 10;
+    my $beg_idx = $arr[8] + 11;
     my $num = $arr[$beg_idx - 1];
     my $end_idx = $beg_idx + $num * 5;
+    #debug("req user list beg_idx:$beg_idx end_idx:$end_idx end:$#arr");
     return "user list too long ($beg_idx,$num,$#arr)"
         if $end_idx > $#arr;
+
     for (my $i = $beg_idx; $i < $end_idx; $i += 5) {
         my $u = {
                 beg_time => $arr[$i],
@@ -107,10 +110,19 @@ sub parse_req ($) {
             if length($u->{method}) != 3;
         return "invalid uid $i"
             if $u->{uid} && $u->{uid} !~ /^\d+/;
+        #debug("next req user:%s uid:%s method:%s beg_time:%s",
+        #        $u->{user}, $u->{uid}, $u->{method}, $u->{beg_time});
         push @users, $u;
     }
 
-    return { cmd => $cmd, log_usr => $usr, ips => \@ips, users => \@users };
+    my $req = {
+        cmd => $cmd,
+        opts => $opts,
+        log_usr => $usr,
+        ips => \@ips,
+        users => \@users
+        };
+    return $req;
 }
 
 #
@@ -127,7 +139,7 @@ sub handle_request ($) {
     for my $ip (@{ $req->{ips} }) {
         next unless $ip =~ $vpn_regex;
         if (defined $vpn_ip) {
-            debug("duplicate vpn ip address");
+            debug("duplicate vpn ip");
             next;
         }
         $vpn_ip = $ip;
@@ -151,7 +163,8 @@ sub handle_request ($) {
 
     if ($cmd eq 'I') {
         # verify login time
-        return "invalid login time" if $usr->{beg_time} !~ /^\d+$/;
+        return "invalid login time"
+            if $usr->{beg_time} !~ /^\d+$/;
         # verify user password
         my $msg = ldap_auth($usr->{user}, $usr->{pass});
         return $msg if $msg;
@@ -165,7 +178,20 @@ sub handle_request ($) {
     }
 
     update_user_mapping($cmd, $vpn_ip, $users);
-    return "OK";
+
+    my $reply = "OK";
+    if (&OPT_GET_GROUPS & $req->{opts}) {
+        my $group_map = get_user_groups($users);
+        $reply .= ":~:" . scalar(keys %$group_map);
+        for my $user (sort keys %$group_map) {
+            my $groups = $group_map->{$user};
+            $reply .= sprintf(":%s:%d:%s/", $user, scalar(@$groups),
+                                join("", map("$_:", @$groups)));
+        }
+        $reply .= ":~";
+    }
+
+    return $reply;
 }
 
 ##############################################
@@ -369,7 +395,7 @@ sub _ssl_read_done ($$$) {
         return;
     }
 
-    my $req = parse_req($pkt);
+    my $req = parse_request($pkt);
     my $ret;
     if (ref($req) eq 'HASH') {
         debug("request from %s \"%s\"", $c_chan->{addr}, $pkt);

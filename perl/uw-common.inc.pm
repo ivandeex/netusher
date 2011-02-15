@@ -16,6 +16,10 @@ use POSIX;
 use EV;
 use Time::HiRes qw(gettimeofday clock_gettime CLOCK_MONOTONIC);
 
+# request header options
+use constant OPT_USER_LIST  => 1;
+use constant OPT_GET_GROUPS => 2;
+
 ##############################################
 # Configuration file
 #

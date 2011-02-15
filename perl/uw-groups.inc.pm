@@ -41,6 +41,34 @@ sub gmirror_init () {
 }
 
 #
+# parse group ids from server
+#
+sub handle_gmirror_reply ($$$) {
+    my ($job, $reply, $arr_ref) = @_;
+    return unless @$arr_ref;
+    my @arr = @$arr_ref;
+    my $ntokens = $arr[1];
+    if ($arr[0] ne "~" || $arr[$#arr] ne "~" || $ntokens !~ /^\d+$/) {
+        info("invalid gmirror reply");
+        return;
+    }
+
+    my $group_map = {};
+    my $k = 2;
+    for (my $i = 0; $i < $ntokens; $i++) {
+        my $user = $arr[$k++];
+        my $ngroups = $arr[$k++];
+        if ($ngroups !~ /^\d+$/ || $arr[$k + $ngroups] ne "/") {
+            info("invalid gmirror reply at token $i");
+            return;
+        }
+        $group_map->{$user} = [ @arr[$k .. ($k + $ngroups - 1)] ];
+    }
+
+    debug("gmirror reply ok ($ntokens tokens)");
+}
+
+#
 # parse mirroring rules
 #
 sub parse_gmirror_rules () {
@@ -400,8 +428,8 @@ sub get_active_users () {
                 uid => $uid,
                 };
         push @user_list, $u;
-        debug("user_list next: user:%s uid:%s method:%s beg_time:%s",
-                $user, $uid, $method, $u->{beg_time});
+        #debug("user_list next: user:%s uid:%s method:%s beg_time:%s",
+        #        $user, $uid, $method, $u->{beg_time});
     }
 
     return @user_list;

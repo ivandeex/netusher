@@ -56,6 +56,14 @@ sub get_user_uid ($) {
 }
 
 #
+# return groups for a set of users
+#
+sub get_user_groups ($) {
+    my ($users) = @_;
+    return {};
+}
+
+#
 # user authentication caching (used by client)
 #
 sub check_auth_cache ($$$) {
