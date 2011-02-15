@@ -1,95 +1,94 @@
-/* config.h.  Generated from config.h.in by configure.  */
-/* config.h.in.  Generated from configure.ac by autoheader.  */
+/* src/config.h.in.  Generated from configure.ac by autoheader.  */
 
 /* Define to 1 if you have the <arpa/inet.h> header file. */
-#define HAVE_ARPA_INET_H 1
+#undef HAVE_ARPA_INET_H
 
 /* Define to 1 if you have the `bzero' function. */
-#define HAVE_BZERO 1
+#undef HAVE_BZERO
 
 /* Define to 1 if you have the <dlfcn.h> header file. */
-#define HAVE_DLFCN_H 1
+#undef HAVE_DLFCN_H
 
 /* Define to 1 if you don't have `vprintf' but do have `_doprnt.' */
-/* #undef HAVE_DOPRNT */
+#undef HAVE_DOPRNT
 
 /* Define to 1 if you have the `gethostbyname_r' function. */
-#define HAVE_GETHOSTBYNAME_R 1
+#undef HAVE_GETHOSTBYNAME_R
 
 /* Define to 1 if you have the <inttypes.h> header file. */
-#define HAVE_INTTYPES_H 1
+#undef HAVE_INTTYPES_H
 
 /* Define to 1 if you have the <memory.h> header file. */
-#define HAVE_MEMORY_H 1
+#undef HAVE_MEMORY_H
 
 /* Define to 1 if you have the <netdb.h> header file. */
-#define HAVE_NETDB_H 1
+#undef HAVE_NETDB_H
 
 /* Define to 1 if you have the <netinet/in.h> header file. */
-#define HAVE_NETINET_IN_H 1
+#undef HAVE_NETINET_IN_H
 
 /* Define to 1 if you have the <stdint.h> header file. */
-#define HAVE_STDINT_H 1
+#undef HAVE_STDINT_H
 
 /* Define to 1 if you have the <stdlib.h> header file. */
-#define HAVE_STDLIB_H 1
+#undef HAVE_STDLIB_H
 
 /* Define to 1 if you have the <strings.h> header file. */
-#define HAVE_STRINGS_H 1
+#undef HAVE_STRINGS_H
 
 /* Define to 1 if you have the <string.h> header file. */
-#define HAVE_STRING_H 1
+#undef HAVE_STRING_H
 
 /* Define to 1 if you have the <sys/stat.h> header file. */
-#define HAVE_SYS_STAT_H 1
+#undef HAVE_SYS_STAT_H
 
 /* Define to 1 if you have the <sys/types.h> header file. */
-#define HAVE_SYS_TYPES_H 1
+#undef HAVE_SYS_TYPES_H
 
 /* Define to 1 if you have the <unistd.h> header file. */
-#define HAVE_UNISTD_H 1
+#undef HAVE_UNISTD_H
 
 /* True if compiler supports -fvisibility=hidden */
-#define HAVE_VISIBILITY_HIDDEN 
+#undef HAVE_VISIBILITY_HIDDEN
 
 /* Define to 1 if you have the `vprintf' function. */
-#define HAVE_VPRINTF 1
+#undef HAVE_VPRINTF
 
 /* Define to 1 if your C compiler doesn't accept -c and -o together. */
-/* #undef NO_MINUS_C_MINUS_O */
+#undef NO_MINUS_C_MINUS_O
 
 /* Name of package */
-#define PACKAGE "userwatch"
+#undef PACKAGE
 
 /* Define to the address where bug reports for this package should be sent. */
-#define PACKAGE_BUGREPORT "vitkinet@gmail.com"
+#undef PACKAGE_BUGREPORT
 
 /* Define to the project copyright requisites */
-#define PACKAGE_COPYRIGHT "Copyright (c) 2011, vitki.net"
+#undef PACKAGE_COPYRIGHT
 
 /* Define to the full name of this package. */
-#define PACKAGE_NAME "userwatch"
+#undef PACKAGE_NAME
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "userwatch 0.1"
+#undef PACKAGE_STRING
 
 /* Define to the one symbol short name of this package. */
-#define PACKAGE_TARNAME "userwatch"
+#undef PACKAGE_TARNAME
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "0.1"
+#undef PACKAGE_VERSION
 
 /* Define to the project web address */
-#define PACKAGE_WEBSITE "http://vitki.net/userwatch"
+#undef PACKAGE_WEBSITE
 
 /* Define to 1 if you have the ANSI C header files. */
-#define STDC_HEADERS 1
+#undef STDC_HEADERS
 
 /* Version number of package */
-#define VERSION "0.1"
+#undef VERSION
 
 /* Define to empty if `const' does not conform to ANSI C. */
-/* #undef const */
+#undef const
 
-/* Define to `unsigned int' if <sys/types.h> does not define. */
-/* #undef size_t */
+/* Define to `unsigned' if <sys/types.h> does not define. */
+#undef size_t

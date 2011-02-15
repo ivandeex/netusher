@@ -1,6 +1,6 @@
 /* -*-c++-*-  vi: set ts=4 sw=4 :
 
-  (C) Copyright 2008, vitki.net. All rights reserved.
+  (C) Copyright 2011, vitki.net. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -16,11 +16,9 @@
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 
-  $Date$
-  $Revision$
-  $Source$
+  $Id$
 
-  Client PAM module.
+  UserWatch PAM module.
 
 */
 
@@ -220,4 +218,5 @@ EXPORT_SYMBOL struct pam_module _pam_uwatch_modstruct = {
 };
 #endif
 
+/********************************************************/
 
