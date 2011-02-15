@@ -424,12 +424,11 @@ sub run_prog ($;$) {
         return -1;
     }
     if ($out_ref && 1) {
-        $SIG{PIPE} = "IGNORE";
         my $temp = "/tmp/xxx.$progname.run.".time().".$$";
         add_temp_file($temp);
         system("$cmd >$temp 2>&1");
         $kid = $?;
-        $$out_ref = read_all_file($temp);
+        $$out_ref = read_file($temp);
         del_temp_file($temp);
     } else {
         system("$cmd >/dev/null 2>&1");
