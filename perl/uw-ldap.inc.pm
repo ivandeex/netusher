@@ -93,23 +93,32 @@ sub ldap_auth ($$) {
 #
 # return uidNumber for a user
 #
-sub ldap_get_user_uid ($) {
+sub ldap_get_user_uid_grp ($) {
     my ($user) = @_;
-    my ($uid, $msg);
+    my ($uid, $grp, $msg);
     if ($ldap_parent) {
-        my $reply = _ldap_wait_reply("UID $user");
-        ($uid, $msg) = ($1, $2) if $reply =~ /^(\S+) (.*)$/;
-        undef $uid if $uid eq "-";
+        my $reply = _ldap_wait_reply("UID_GRP $user");
+        ($msg, $uid, $grp) = split /\|/, $reply;
     } else {
-        my ($attr_user, $attr_uid) = @uw_config{qw(ldap_attr_user ldap_attr_uid)};
-        my (@res) = _ldap_search(
-                            "($attr_user=$user)", [ $attr_uid ],
-                            $uw_config{ldap_user_base}
-                            );
+        my ($attr_user, $attr_uid, $attr_gid, $attr_group)
+             = @uw_config{qw(ldap_attr_user ldap_attr_uid
+                            ldap_attr_gid ldap_attr_group)};
+        my (@res) = _ldap_search("($attr_user=$user)",
+                                [ $attr_uid, $attr_gid ],
+                                $uw_config{ldap_user_base});
         $msg = $res[0];
         $uid = $res[1]->{$attr_uid};
+        my $gid = $res[1]->{$attr_gid};
+        if ($gid) {
+            (@res) = _ldap_search("($attr_gid=$gid)", [ $attr_group ],
+                                $uw_config{ldap_group_base});
+            $grp = $res[1]->{$attr_group};
+        }
+        $grp = $gid unless $grp;
     }
-    return ($uid, $msg);
+    undef $uid if $uid eq "";
+    undef $grp if $grp eq "";
+    return ($msg, $uid, $grp);
 }
 
 #
@@ -125,10 +134,8 @@ sub ldap_get_user_groups ($) {
     } else {
         my ($attr_group, $attr_member)
                 = @uw_config{qw(ldap_attr_group ldap_attr_member)};
-        my (@res) = _ldap_search(
-                        "(&(objectClass=posixGroup)($attr_member=$user))",
-                        [ $attr_group ], $uw_config{ldap_group_base}
-                        );
+        my (@res) = _ldap_search("($attr_member=$user)", [ $attr_group ],
+                                $uw_config{ldap_group_base});
         $msg = shift @res;
         push @groups, $_->{$attr_group} for (@res);
     }
@@ -153,13 +160,13 @@ sub _ldap_child_loop () {
         elsif ($op eq "HELLO") {
             $reply = "OK";
         }
-        elsif ($op eq "UID") {
-            my ($uid, $msg) = ldap_get_user_uid($cmd[1]);
-            $uid = "-" if !defined($uid) || $uid eq "";
-            $msg = "0" unless $msg;
-            $reply = "$uid $msg";
+        elsif ($op eq "UID_GRP") {
+            my ($msg, $uid, $grp) = ldap_get_user_uid_grp($cmd[1]);
+            $msg =~ s/\|/,/g;
+            $reply = "$msg|$uid|$grp";
         } elsif ($op eq "GROUPS") {
             my ($msg, $groups) = ldap_get_user_groups($cmd[1]);
+            $msg =~ s/\|/,/g;
             $groups = [] unless $groups;
             $reply = join("|", $msg, @$groups);
         }

@@ -12,13 +12,13 @@ require "$Bin/uw-common.inc.pm";
 use Digest::MD5 qw(md5_hex);
 
 our (%uw_config, %cache_backend);
-my  (%uid_cache, %group_cache, %auth_cache);
+my  (%uid_grp_cache, %group_cache, %auth_cache);
 
 #
 # flush all caches
 #
 sub cache_flush () {
-    %uid_cache = ();
+    %uid_grp_cache = ();
     %group_cache = ();
     %auth_cache = ();
 }
@@ -26,33 +26,37 @@ sub cache_flush () {
 #
 # return uidNumber for a user (used by server)
 #
-sub get_user_uid ($) {
-    my ($user) = @_;
-    my ($uid, $msg);
+sub get_user_uid_grp ($$) {
+    my ($user, $grp_ref) = @_;
+    my ($uid, $grp, $msg);
 
     # try to fetch uid from cache
     my $ttl = $uw_config{uid_cache_ttl};
-    if ($ttl > 0 && exists($uid_cache{$user})) {
-        if (monotonic_time() - $uid_cache{$user}{stamp} < $ttl) {
-            $uid = $uid_cache{$user}{uid};
-            debug("get_user_uid user:$user uid:$uid from:cache");
+    if ($ttl > 0 && exists($uid_grp_cache{$user})) {
+        if (monotonic_time() - $uid_grp_cache{$user}{stamp} < $ttl) {
+            $uid = $uid_grp_cache{$user}{uid};
+            $grp = $uid_grp_cache{$user}{grp};
+            debug("get user:$user uid:$uid grp:$grp from:cache");
+            $$grp_ref = $grp if defined $grp_ref;
             return $uid;
         }
-        delete $uid_cache{$user};
+        delete $uid_grp_cache{$user};
     }
 
-    ($uid, $msg) = &{$cache_backend{get_user_uid}}($user);
+    ($msg, $uid, $grp) = &{$cache_backend{get_user_uid_grp}}($user);
     if ($msg) {
-        debug("get_user_uid user:$user uid:$uid error:$msg");
+        debug("get user:$user uid:$uid error:$msg");
         return;
     }
 
     # update cache with defined or undefined uid
     if ($ttl > 0) {
-        $uid_cache{$user}{uid} = $uid;
-        $uid_cache{$user}{stamp} = monotonic_time();
+        $uid_grp_cache{$user}{uid} = $uid;
+        $uid_grp_cache{$user}{grp} = $grp;
+        $uid_grp_cache{$user}{stamp} = monotonic_time();
     }
-    debug("get_user_uid user:$user uid:$uid from:backend");
+    debug("get user:$user uid:$uid grp:$grp from:backend");
+    $$grp_ref = $grp if defined $grp_ref;
     return $uid;
 }
 
@@ -101,8 +105,10 @@ sub inquire_groups ($) {
 
     # skip local users and users with non-matching id
     for my $user (keys %group_map) {
+        my $grp;
+        my $our_uid = get_user_uid_grp($user, \$grp);
         my $his_uid = $group_map{$user};
-        my $our_uid = get_user_uid($user);
+
         unless (defined $our_uid) {
             debug("inquire_groups($user): skip local user");
             delete $group_map{$user};
@@ -113,8 +119,14 @@ sub inquire_groups ($) {
             delete $group_map{$user};
             next;
         }
-        my $groups = get_user_groups($user);
-        $group_map{$user} = $groups ? $groups : [];
+
+        # sort and remove duplicates
+        my %groups_set = ( $grp => 1 );
+        my $groups_ref = get_user_groups($user);
+        if ($groups_ref) {
+            $groups_set{$_} = 1 for (@$groups_ref);
+        }
+        $group_map{$user} = [ sort keys %groups_set ];
     }
 
     return \%group_map;

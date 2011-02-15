@@ -24,8 +24,8 @@ our ($ldap_child);
 our ($vpn_regex);
 
 our %cache_backend = (
-            get_user_uid    => \&ldap_get_user_uid,
-            get_user_groups => \&ldap_get_user_groups
+            get_user_uid_grp    => \&ldap_get_user_uid_grp,
+            get_user_groups     => \&ldap_get_user_groups
         );
 
 #
@@ -151,7 +151,7 @@ sub handle_request ($) {
 
     if ($cmd eq 'I' || $cmd eq 'O') {
         # first, verify that user exists at all
-        my $uid = get_user_uid($usr->{user});
+        my $uid = get_user_uid_grp($usr->{user}, undef);
         return "user not found" unless defined $uid;
 
         # verify that user id matches ldap
@@ -334,7 +334,8 @@ sub main_loop () {
                 [ qw(
                     port ca_cert peer_pem idle_timeout rw_timeout
                     also_local syslog stdout debug stacktrace daemonize
-                    ldap_attr_user ldap_attr_uid ldap_attr_group ldap_attr_member
+                    ldap_attr_user ldap_attr_uid ldap_attr_gid
+                    ldap_attr_group ldap_attr_member
                     ldap_start_tls ldap_timeout ldap_force_fork
                     uid_cache_ttl group_cache_ttl
                     user_retention purge_interval mysql_port

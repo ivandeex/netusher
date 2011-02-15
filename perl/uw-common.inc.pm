@@ -87,6 +87,7 @@ our %uw_config =
         ldap_group_base => undef,
         ldap_attr_user  => 'uid',
         ldap_attr_uid   => 'uidNumber',
+        ldap_attr_gid   => 'gidNumber',
         ldap_attr_group => 'cn',
         ldap_attr_member=> 'memberUid',
         ldap_timeout    => 5,
