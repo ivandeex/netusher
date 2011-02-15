@@ -29,9 +29,8 @@
 #include <assert.h>
 #include <syslog.h>
 #include <unistd.h>
+#include <stdarg.h>
 #include <pwd.h>
-
-#include "uwcli.h"
 
 #ifdef HAVE_VISIBILITY_HIDDEN
 #define EXPORT_SYMBOL __attribute__((visibility("default")))
