@@ -14,12 +14,19 @@ require "$Bin/uw-groups.inc.pm";
 
 use IO::Socket::UNIX;
 
+#
+# require: perl-IO-Handle-Record and perl-Class-Member
+#
+# you can obtain these modules from
+# http://rpm.vitki.net/pub/centos/5/i386/repoview/letter_p.group.html
+#
+use IO::Handle::Record; # for peercred
+
 our ($config_file, $progname, %uw_config);
 our ($ev_loop, %ev_watch, $ev_reload);
 our (%local_users);
 my  ($srv_chan, @jobs, $finished);
 my  ($reconnect_pending, $reconnect_fast);
-my  ($unix_seqno);
 my  $opt_gmirror = 0;
 
 our %cache_backend = (
@@ -371,7 +378,11 @@ sub unix_accept_pending () {
         return;
     }
 
-    my $addr = sprintf('unix_%04d', ++$unix_seqno);
+    # determine who is our client
+    my ($pid, $euid, $egid) = $conn->peercred();
+    my $prog = readlink("/proc/$pid/exe");
+    my $addr = "$euid:$pid:$prog";
+
     my $c_chan = {
         type => 'accepted',
         destructor => \&unix_disconnect,
@@ -381,6 +392,12 @@ sub unix_accept_pending () {
         unix => 1,
         addr => $addr
         };
+
+    if ($euid != 0) {
+        info("reject connection from pid:$pid euid:$euid prog:$prog");
+        ev_close($c_chan);
+        return;
+    }
 
     # start reading
     $conn->blocking(0) or fail("unix client non-blocking: $!");
@@ -534,5 +551,4 @@ while (1) {
 }
 
 exit(0);
-
 
