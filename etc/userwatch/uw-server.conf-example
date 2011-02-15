@@ -52,13 +52,13 @@
 # and the server will detect the crash after given retention interval
 # and remove stale records from the database.
 # Default: 300 seconds
-user_retention = 300
+#user_retention = 600
 
 # Parameter: purge_interval
 # This parameter defines how frequently server should checks for stale
 # user records.
 # Default: 300 seconds
-purge_interval = 300
+#purge_interval = 600
 
 # Parameter: pid_file
 # Defines file where server daemon will record process id after
