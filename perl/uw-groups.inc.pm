@@ -23,7 +23,7 @@ our (%uw_config, $progname);
 # group mirroring
 #
 
-my ($skin_name, %lg_gid, %lg_members, %g_map);
+my ($skin_name, %lg_gid, %lg_members, %group_to_lg, %user_groups);
 my ($etc_group_str, $etc_group_sign);
 
 sub gmirror_init () {
@@ -35,6 +35,8 @@ sub gmirror_init () {
     # initialize local groups
     %lg_gid = ();
     %lg_members = ();
+    %group_to_lg = ();
+    %user_groups = ();
 
     parse_gmirror_rules();
     update_etc_group("gshadow");
@@ -44,17 +46,20 @@ sub gmirror_init () {
 #
 # parse group ids from server
 #
-sub handle_gmirror_reply ($$$) {
-    my ($job, $reply, $arr_ref) = @_;
-    return unless @$arr_ref;
-    my @arr = @$arr_ref;
+sub handle_gmirror_reply ($) {
+    my ($parts_ref) = @_;
+    return unless @$parts_ref;
+
+    # parse reply header
+    my @arr = @$parts_ref;
     my $ntokens = $arr[1];
     if ($arr[0] ne "~" || $arr[$#arr] ne "~" || $ntokens !~ /^\d+$/) {
         info("invalid gmirror reply");
         return;
     }
 
-    my $group_map = {};
+    # parse reply body
+    %user_groups = ();
     my $k = 2;
     for (my $i = 0; $i < $ntokens; $i++) {
         my $user = $arr[$k++];
@@ -63,11 +68,58 @@ sub handle_gmirror_reply ($$$) {
             info("invalid gmirror reply at token $i");
             return;
         }
-        $group_map->{$user} = [ @arr[$k .. ($k + $ngroups - 1)] ];
-        debug("gmirror(%s):%s", $user, join(",", @{ $group_map->{$user} }));
+        $user_groups{$user} = [ @arr[$k .. ($k + $ngroups - 1)] ];
+        debug("gmirror(%s):%s", $user, join(",", @{ $user_groups{$user} }));
+    }
+}
+
+#
+# apply mirroring rules to all active users
+#
+sub gmirror_apply ($) {
+    my ($job) = @_;
+    my (%users_set, $off_user, $off_method);
+
+    if (defined($job) && defined($job->{params})) {
+        my $p = $job->{params};
+        if (defined($p->{user}) && defined($p->{pass})) {
+            # this is login
+            $users_set{$p->{user}} = 1;
+        }
+        elsif (defined($p->{user} && defined($p->{method}))) {
+            # this is logout
+            ($off_user, $off_method) = ($p->{user}, $p->{method});
+        }
     }
 
-    debug("gmirror reply ok ($ntokens tokens)");
+    # create list of active users
+    for my $u (get_active_users()) {
+        if (defined($off_user)) {
+            if ($u->{user} eq $off_user && $u->{method} eq $off_method) {
+                undef $off_user;
+                next;
+            }
+        }
+        $users_set{$u->{user}} = 1;
+    }
+
+    # clean up local groups
+    $lg_members{$_} = {} for (keys %lg_gid);
+
+    # apply rules
+    for my $user (sort keys %users_set) {
+        my %lgroups;
+        next unless defined $user_groups{$user};
+        for my $group (@{ $user_groups{$user} }) {
+            next unless defined $group_to_lg{$group};
+            for my $lgroup (%{ $group_to_lg{$group} }) {
+                $lg_members{$lgroup}{$user} = 1;
+            }
+        }
+    }
+
+    # re-create /etc/group
+    update_etc_group();
 }
 
 #
@@ -190,12 +242,12 @@ sub parse_gmirror_rules () {
     }
 
     # copy non-empty mappings to global map
-    %g_map = ();
+    %group_to_lg = ();
     for $src (keys %map) {
         next unless %{ $map{$src} };
-        $g_map{$src} = {};
+        $group_to_lg{$src} = {};
         for $dst (keys %{ $map{$src} }) {
-            $g_map{$src}{$dst} = 1;
+            $group_to_lg{$src}{$dst} = 1;
         }
     }
 
@@ -204,10 +256,10 @@ sub parse_gmirror_rules () {
                 join(", ", map("$_=$lg_gid{$_}",
                     sort { $lg_gid{$a} <=> $lg_gid{$b} } keys %lg_gid)
                 ));
-        for $src (keys %g_map) {
+        for $src (keys %group_to_lg) {
             debug("group mapping $src: ".
                 join(",", sort { $lg_gid{$a} <=> $lg_gid{$b} }
-                            keys %{ $g_map{$src} }
+                            keys %{ $group_to_lg{$src} }
                 ));
         }
     }

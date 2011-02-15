@@ -58,9 +58,10 @@ sub handle_reply ($$$) {
     if ($p->{message}) {
         info("%s: %s", $p->{message}, $reply);
     }
-    if ($p->{pass}) {
+    if ($p->{user} && $p->{pass}) {
         update_auth_cache($p->{user}, $p->{uid}, $p->{pass}, $reply);
     }
+    gmirror_apply($job) if $uw_config{enable_gmirror};
 }
 
 sub update_active_users ($) {
@@ -119,7 +120,8 @@ sub user_logout ($$$) {
 
     my $usr = { method => $method, user => $user, uid => "" };
     my $req = create_request("O", undef, $usr,  0);
-    queue_job($req, $chan, message => "$user: user logout");
+    queue_job($req, $chan, message => "$user: user logout",
+                user => $user, method => $method);
     # return nothing for channel to wait for server reply
     return;
 }
@@ -184,7 +186,7 @@ sub queue_job ($$%) {
         req => $req,
         chan => $chan,
         source => $chan ? $chan->{addr} : "none",
-        params => %params ? \%params : undef
+        params => \%params
         };
     handle_next_job();
 }
@@ -326,10 +328,10 @@ sub _srv_read_done ($$$) {
     $reply = shift @parts;
     unix_write_reply($job->{chan}, $reply)
         if $job->{chan};
-    handle_gmirror_reply($job, $reply, \@parts)
+    handle_gmirror_reply(\@parts)
         if @parts && $uw_config{enable_gmirror};
-    handle_reply($job, $job->{params}, $reply)
-        if $job->{params};
+    handle_reply($job, $job->{params}, $reply);
+
     undef $job;
     handle_next_job();
 }
