@@ -1,0 +1,156 @@
+##############################################
+# /etc/userwatch/uw-server.conf
+# Configuration file of the uw-client daemon
+# $Id$
+#
+
+##############################################
+# Connection parameters
+#
+
+# Parameter: server
+# Host or IP address of the server host.
+# Default: none, required
+server = uwserver.company.com
+
+# Parameter: port
+# Client will connect to this TCP port on the server box.
+# Default: 7501
+#port = 7501
+
+# Parameter: connect_interval
+# Defines how frequently client daemon should repeat connection
+# attempts if it looses connection with server.
+# Default: 5 seconds
+#connect_interval = 2
+
+# Parameter: peer_pem
+# All traffic between client and server is encrypted. This required
+# parameter defines location of a file in PEM format which contains
+# public SSL certificate and private key of the client.
+# Default: /etc/userwatch/uw-client.pem
+#peer_pem = /etc/pki/my-client-cert.pem
+
+# Parameter: ca_cert
+# This required parameter should point to a X509 certificate of CA
+# used to sign client and server certificates.
+# Default: /etc/userwatch/ca.crt
+#ca_cert = /etc/pki/verisign-cert.crt
+
+# Parameter: unix_socket
+# Filesystem path of the Unix-domain socket where client daemon
+# accepts connections from PAM modules.
+#You are not supposed to change this.
+# Default: see below
+#unix_socket = /var/run/userwatch/uw-client.sock
+
+# Parameters: idle_timeout, rw_timeout
+# These parameters help fighting stale client connections and hung
+# client machines. Connections can shut down in two cases. First,
+# if a client connects but does not send any data for more than
+# idle_timeout seconds. Second, if a client starts to send data
+# but does not finish within rw_timeout seconds. In normal conditions
+# you will not need to change these parameters but they can help
+# in case of slow internet connection.
+# Default: see below
+#idle_timeout = 240
+#rw_timeout = 10
+
+##############################################
+# Operation parameters
+#
+
+# Parameter: pid_file
+# Defines file where server daemon will record process id after
+# going background. You are not supposed to change this parameter.
+# Default: see below
+#pid_file = /var/run/userwatch/uw-client.pid
+
+# Parameter: update_interval
+# This parameter defines how frequently client should send updated
+# lists of currently logged in users to the server.
+# These updates prevent server from treating non-updated users
+# as stale (see "user_retention" in the server configuration).
+# Default: 120 seconds
+#update_interval = 240
+
+# Parameters: auth_cache_ttl
+# Client daemon can remember successful user authentications
+# for given number of seconds in order to speed up successive
+# authentications and reduce network roundtrips.
+# Please note that user password is kept only in memory and
+# only in encrypted form.
+# Default: 0 (disabled)
+#auth_cache_ttl = 60
+
+# Parameter: enable_gmirror
+# The client daemon can be used to dynamically add users to or remove
+# them from local groups in /etc/group depending on what LDAP groups
+# they belong to. Adding and removal is performed when a user logs in
+# or logs out by modifying the /etc/group file. Having users strictly
+# in local groups can be required for example by SElinux or in order
+# to avoid network dependency in particular permission checks.
+# If you set this parameter to 1, make sure you revise the list of
+# mirroring rules listed in a separate configuration file (see below).
+# Default: 0 (disabled)
+#enable_gmirror = 1
+
+# Parameter: gmirror_conf
+# Defines location of the file containing group mirroring rules.
+# Default: see below
+#gmirror_conf = /etc/userwatch/gmirror.conf
+
+# Parameters: update_nscd
+# Client modifications of /etc/group might be not visible to NSS if the
+# system runs NSCD (name service caching daemon). As a workaround, client
+# can command nscd to reload group table. Setting this parameter to 0
+# will turn off this mechanism (e.g. if you know that nscd is not present).
+# Default: 1 (enabled)
+#update_nscd = 0
+
+# Parameters: nscd_pid_file
+# Defines path of the file where NSCD stores its process id.
+# Default: see below
+#nscd_pid_file = /var/run/nscd/nscd.pid
+
+##############################################
+# Debugging parameters
+#
+
+# Parameter: debug
+# If this is set to 1, program will print a lot of debugging information.
+# Default: 0
+#debug = 1
+
+# Parameter: daemonize
+# Normally the program detaches from console after setup and runs in
+# background. If this is set to 0, the program will continue in foreground.
+# Default: 1
+#daemonize = 0
+
+# Parameter: stacktrace
+# If this is set to 1, and program aborts, it will print a detailed
+# stack trace in addition to the failure message.
+# Default: 0
+#stacktrace = 0
+
+# Parameter: syslog
+# If this is set to 1, the program will log messages and debugging
+# information to system log, usually found at /var/log/messages.
+# Default: 1
+#syslog = 1
+
+# Parameter: stdout
+# If this is set to 1, the program will additionally print messages
+# to standard output.
+# Default: 0
+#stdout = 1
+
+# Parameter: also_local
+# Normally client and server exchange information only about LDAP users.
+# If this is set to 1 (not for production environments), local users
+# will be also negotiated. You are not supposed to use this parameter.
+# Default: 0
+#also_local = 1
+
+

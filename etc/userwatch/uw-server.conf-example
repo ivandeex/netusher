@@ -1,0 +1,311 @@
+##############################################
+# /etc/userwatch/uw-server.conf
+# Configuration file of the uw-client daemon
+# $Id$
+#
+
+##############################################
+# Connection parameters
+#
+
+# Parameter: port
+# TCP port where server listens for client connections.
+# Default: 7501
+#port = 7501
+
+# Parameter: peer_pem
+# All traffic between client and server is encrypted. This required
+# parameter defines location of a file in PEM format which contains
+# public SSL certificate and private key of the server.
+# Default: /etc/userwatch/uw-server.pem
+#peer_pem = /etc/pki/my-server-cert.pem
+
+# Parameter: ca_cert
+# This required parameter should point to a X509 certificate of CA
+# used to sign client and server certificates.
+# Default: /etc/userwatch/ca.crt
+#ca_cert = /etc/pki/verisign-cert.crt
+
+# Parameters: idle_timeout, rw_timeout
+# These parameters help fighting stale client connections and hung
+# client machines. Connections can shut down in two cases. First,
+# if a client connects but does not send any data for more than
+# idle_timeout seconds. Second, if a client starts to send data
+# but does not finish within rw_timeout seconds. In normal conditions
+# you will not need to change these parameters but they can help
+# in case of slow internet connection.
+# Default: see below
+#idle_timeout = 240
+#rw_timeout = 10
+
+##############################################
+# Operation parameters
+#
+
+# Parameter: user_retention
+# The server records logged in and logged out users in the database
+# based on requests from client daemons. After login, client daemons
+# periodically send updates with lists of currently active users
+# (see "update_interval" in the client configuration).
+# If a client daemon or client machine crashes, the udpates will stop
+# and the server will detect the crash after given retention interval
+# and remove stale records from the database.
+# Default: 300 seconds
+user_retention = 300
+
+# Parameter: purge_interval
+# This parameter defines how frequently server should checks for stale
+# user records.
+# Default: 300 seconds
+purge_interval = 300
+
+# Parameter: pid_file
+# Defines file where server daemon will record process id after
+# going background. You are not supposed to change this parameter.
+# Default: see below
+#pid_file = /var/run/userwatch/uw-server.pid
+
+##############################################
+# Database parameters
+#
+
+# Parameter: mysql_host
+# Hostname or IP address of the database server.
+# Default: localhost
+#mysql_host = mysql.company.com
+
+# Parameter: mysql_port
+# Listening port of the database server.
+# Default: 3306
+#mysql_port = 3306
+
+# Parameters: mysql_user, mysql_pass
+# Username and password for database connection.
+# Default: none, required
+mysql_user = mydbuser
+mysql_pass = secret
+
+# Parameter: mysql_db
+# MySQL database name.
+# Default: none, required
+mysql_db = userwatch
+
+##############################################
+# OpenVPN parameters
+#
+
+# Parameter: vpn_net
+# When a client request arrives, it contains IP addresses assigned to
+# network interfaces of the client. The server picks a single address
+# belonging to the VPN network controlled by the OpenVPN daemon.
+# This parameter defines netmask of this network. Left non-zero octets
+# make up the net part of the mask.
+# Default: none, required
+vpn_net = 192.168.0.0
+
+# Parameter: vpn_scan_interval 
+# You can configure OpenVPN daemon to periodically dump network status
+# to a file. If this parameter is positive, uw-server will poll this
+# file and gather vpn host status and exchange statistics.
+# Setting this to 0 disables polling.
+# Please note that OpenVPN status format should be set to 2.
+# Default: 0, optional
+#vpn_scan_interval = 60
+
+# Parameter: vpn_status_file
+# This parameter defines location of the OpenVPN status file.
+# Default: none, optional
+#vpn_status_file = /var/run/openvpn/status.log
+
+# Parameter: vpn_event_dir
+# In addition to status polling the server can react to OpenVPN state
+# changes (when a host connects to or disconnects from OpenVPN) using
+# openvpn scripting mechanism. Point client-connect and client-disconnect
+# parameters in the OpenVPN configuration file to the openvpn-event.sh
+# script. The script will be run by OpenVPN when network changes state,
+# produce a small temporary file describing the event, put it in a given
+# directory (if you don't like the default, edit the script to your taste)
+# and send SIGUSR2 to the uw-server daemon. Upon catching the signal or
+# during the next poll period the daemon will find the file, read and
+# immediately remove it, and update VPN statistics in the database.
+# Default: same directory as parent directory of vpn_status_file
+#vpn_event_dir = /var/run/openvpn
+
+# Parameter: vpn_event_mask
+# This parameter defines how temporary event files are named. If you
+# modify it, make sure the openvpn-event.sh script matches your changes.
+# Default: see below
+#vpn_event_mask = userwatch.event.*
+
+# Parameter: vpn_scan_pause
+# This parameter may be helpful if both status polling and event mechanisms
+# are used to follow the OpenVPN network state. The problem is that after
+# a new host has connected to the network, it's VPN address can be undefined
+# during a short period of time, while connection parameters are negotiated.
+# During this period the OpenVPN status file is in transitional state
+# leading to spurious connect/disconnect events reported by uw-server.
+# As a workaround, this parameter disables status polling for a given number
+# of seconds after each state change.
+# Default: 3 seconds
+#vpn_scan_pause = 30
+
+# Parameter: vpn_archive_dir
+# This paremeter can help in tracing OpenVPN problems. If it is non-empty,
+# event files produced by openvpn-event.sh will be archived in the given
+# directory after parsing.
+# Default: none, optional
+#vpn_archive_dir = /tmp/vpnarchive
+
+# Parameter: vpn_cfg_mask
+# If your OpenVPN daemon serves several network and you need to follow only
+# one of them, put the server configuration file name (without path) here.
+# Default: none, optional
+#vpn_cfg_mask = vpnname
+
+##############################################
+# IPtables parameters
+#
+
+# Parameter: iptables_user_vpn
+# The chains listed in this parameter will be updated with VPN IP
+# when a user logs into or logs off a host in the VPN net.
+# The IP will be added to the chain when user logs in,
+# and removed from the chain when the user logs off.
+# Default: none, optional
+#iptables_user_vpn = MY_VPN_CHAIN
+
+# Parameter: iptables_user_real
+# This parameter is similar to the iptables_user_vpn parameter above,
+# but instead of VPN IP the real IP of the host will be used as seen
+# by the OpenVPN server daemon.
+# Default: none, optional
+#iptables_user_real = MY_REAL_IP_CHAIN
+
+# Parameter: iptables_host_real
+# The chains listed in this parameter will be updated when a host
+# joins or leaves our VPN net. The IP will be added to the chain
+# when the host registers with VPN and removed when the host leaves
+# the network. The "real" IP is used, as seen by the OpenVPN daemon.
+# Default: none, optional
+#iptables_host_real = MY_IP_CHAIN
+
+# Parameter: iptables_status
+# The server saves current state of IPtables in the file given by this
+# parameter after every state change. Reloading IPtables can flush
+# controlled tables, and this file can be used to recover the last state
+# by simply running it:
+# $ sh /var/run/userwatch/uw-server.iptables
+# Another way to restore tables is to send SIGUSR1 to the daemon.
+# The rc script provides a friendly wrapper for this method:
+# $ /etc/init.d/uw-server iptables
+# Default: see below
+#iptables_status = /var/run/userwatch/uw-server.iptables
+
+##############################################
+# LDAP parameters
+#
+
+# Parameter: ldap_uri
+# URI of LDAP server in the form ldap[s]://hostname[:port]
+# If port is not in the URI, 389 is used for standard (ldap) and 636
+# for SSL (ldaps) connections. Please note that due to a bug in
+# the Perl SSL implementation, the daemon will fork before opening
+# ldaps connection, increasing total memory footprint.
+# Default: none, required
+ldap_uri = ldap://ldap.company.com
+
+# Parameter: ldap_start_tls
+# Setting this to 1 will initiate StartTLS on standard LDAP connection.
+# Default: 0
+#ldap_start_tls = 1
+
+# Parameter: ldap_timeout
+# Defines timeout for LDAP connections, after which automatic
+# reconnection will be initiated.
+# Default: 5 seconds
+#ldap_timeout = 10
+
+# Parameters: ldap_bind_dn, ldap_bind_pass
+# These parameters define DN and password for LDAP connection.
+# Default: none, required
+ldap_bind_dn = cn=bindn,dc=company,dc=com
+ldap_bind_pass = secret
+
+# Parameters: ldap_user_base, ldap_group_base
+# These parameters define base in the LDAP tree for searching for
+# user and group entries.
+# Default: none, required
+ldap_user_base = ou=users,dc=company,dc=com
+ldap_group_base = ou=groups,dc=company,dc=com
+
+# Parameters: uid_cache_ttl, gid_cache_ttl
+# The daemon can internally cache results of such LDAP queries
+# as finding a user id and user group id by user name, or
+# enumerating members of a group.
+# The default value of 2 seconds simply avoids repetitive LDAP queries
+# during a single client request. Setting to 0 disables caching.
+# Default: 2 seconds
+#uid_cache_ttl = 300
+#group_cache_ttl = 300
+
+# Parameters: ldap_attr_user, ldap_attr_uid, ldap_attr_gid,
+#             ldap_attr_group, ldap_attr_member
+# These parameters define names of LDAP entry attributes for
+# user name, numeric user id, main user group id, group name and
+# group members respectively.
+# The defaults should be fine for most cases.
+# Default: see below
+#ldap_attr_user = uid
+#ldap_attr_uid = uidNumber
+#ldap_attr_gid = gidNumber
+#ldap_attr_group = cn
+#ldap_attr_member = memberUid
+
+##############################################
+# Debugging parameters
+#
+
+# Parameter: debug
+# If this is set to 1, program will print a lot of debugging information.
+# Default: 0
+#debug = 1
+
+# Parameter: ldap_force_fork
+# Normally daemon forks only if LDAP connection is SSL and run as single
+# process otherwise. This parameter will force the fork.
+# You are not supposed to use it. 
+# Default: 0
+#ldap_force_fork = 1
+
+# Parameter: daemonize
+# Normally the program detaches from console after setup and runs in
+# background. If this is set to 0, the program will continue in foreground.
+# Default: 1
+#daemonize = 0
+
+# Parameter: stacktrace
+# If this is set to 1, and program aborts, it will print a detailed
+# stack trace in addition to the failure message.
+# Default: 0
+#stacktrace = 0
+
+# Parameter: syslog
+# If this is set to 1, the program will log messages and debugging
+# information to system log, usually found at /var/log/messages.
+# Default: 1
+#syslog = 1
+
+# Parameter: stdout
+# If this is set to 1, the program will additionally print messages
+# to standard output.
+# Default: 0
+#stdout = 1
+
+# Parameter: also_local
+# Normally client and server exchange information only about LDAP users.
+# If this is set to 1 (not for production environments), local users
+# will be also negotiated. You are not supposed to use this parameter.
+# Default: 0
+#also_local = 1
+
+
