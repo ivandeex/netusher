@@ -1,0 +1,49 @@
+#########################################################
+# UserWatch
+# Rules for mirroring LDAP groups to local groups
+# Copyright (c) 2011, vitki.net
+# $Id$
+#
+
+hw_use_drive   += hw_read_drive hw_burn_disc hw_use_pda hw_write_hdd
+hw_read_drive  += hw_play_disc
+hw_burn_disc   += hw_play_disc hw_use_printer
+hw_play_disc   += hw_use_input
+hw_write_hdd   += hw_read_hdd
+hw_read_hdd    += hw_use_input
+hw_use_pda     += hw_use_player hw_use_printer hw_use_ports
+hw_use_player  += hw_use_input
+hw_use_printer += hw_use_input
+hw_use_ports   += hw_use_input
+hw_use_input   += 
+hw_user_other  += 
+
+hw_use_drive   := lhw_wr_plugvol
+hw_read_drive  := lhw_rd_plugvol
+hw_burn_disc   := lhw_burn_disc
+hw_play_disc   := lhw_play_disc
+hw_write_hdd   := lhw_wr_hdd
+hw_read_hdd    := lhw_rd_hdd
+hw_use_pda     := lhw_use_pda
+hw_use_player  := lhw_use_player
+hw_use_ports   := lhw_use_ports
+hw_use_printer := lhw_use_printer
+hw_use_input   := lhw_use_input
+hw_use_other   := lhw_use_other
+
+disable_for_skin(ut) :: lhw_burn_disc lhw_wr_hdd lhw_rd_hdd lhw_use_printer
+
+lhw_none        == 701
+lhw_wr_plugvol  == 702
+lhw_rd_plugvol  == 703
+lhw_burn_disc   == 704
+lhw_play_disc   == 705
+lhw_wr_hdd      == 706
+lhw_rd_hdd      == 707
+lhw_use_pda     == 708
+lhw_use_player  == 709
+lhw_use_printer == 710
+lhw_use_ports   == 711
+lhw_use_input   == 712
+lhw_use_other   == 713
+
