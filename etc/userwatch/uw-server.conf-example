@@ -129,14 +129,14 @@ vpn_net = 192.168.0.0
 # and send SIGUSR2 to the uw-server daemon. Upon catching the signal or
 # during the next poll period the daemon will find the file, read and
 # immediately remove it, and update VPN statistics in the database.
-# Default: same directory as parent directory of vpn_status_file
-#vpn_event_dir = /var/run/openvpn
+# Default: see below
+#vpn_event_dir = /var/run/userwatch
 
 # Parameter: vpn_event_mask
 # This parameter defines how temporary event files are named. If you
 # modify it, make sure the openvpn-event.sh script matches your changes.
 # Default: see below
-#vpn_event_mask = userwatch.event.*
+#vpn_event_mask = openvpn-event.*
 
 # Parameter: vpn_scan_pause
 # This parameter may be helpful if both status polling and event mechanisms
