@@ -111,6 +111,6 @@ Interacts with pam, openvpn, radius, mysql and netams.
 This subpackage contains server-only files
 
 %changelog
-* Wed Oct 15 2008 Victor Semizarov <vsemizarov$gmail,com> 0.0.1
-- Initial package
+* Tue Jan 15 2011 Vitki <vitkinet@gmail.com> 0.1
+- Initial release
 
