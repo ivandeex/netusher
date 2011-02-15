@@ -24,6 +24,7 @@ our (%uw_config, $progname);
 #
 
 my ($skin_name, %lg_gid, %lg_members, %g_map);
+my ($etc_group_str, $etc_group_sign);
 
 sub gmirror_init () {
     # detect our skin
@@ -36,8 +37,8 @@ sub gmirror_init () {
     %lg_members = ();
 
     parse_gmirror_rules();
-    update_etc_group(0);    # /etc/group
-    update_etc_group(1);    # /etc/gshadow
+    update_etc_group("gshadow");
+    update_etc_group();
 }
 
 #
@@ -226,29 +227,32 @@ sub update_etc_group (;$) {
     }
 
     while (1) {
-        # get file access mode and owners
-        my @st = stat($path);
-        my ($mode1, $uid1, $gid1, $size1, $mtime1) = @st[2,4,5,7,9];
-        my $stat_1 = "$mode1|$uid1|$gid1|$size1|$mtime1";
-
-        # strings with contents of original and new files
-        my $orig = "";
-        my $new = "";
-
         # list of managed groups to be added at the end
         my %pending;
         $pending{$_} = 1 for (keys %lg_gid);
 
-        # read group file line by line
-        open(my $file, $path) or fail("$path: cannot open");
-        while (<$file>) {
-            $orig .= $_;
+        # read group file, inquire access mode and owners
+        my ($sign1, $mode1, $uid1, $gid1) = super_stat($path);
+        my $orig;
+        if ($sign1 eq $etc_group_sign && !$shadow) {
+            $orig = $etc_group_str;
+        } else {
+            $orig = read_file($path) or fail("$path: cannot open");
+            if (!$shadow) {
+                debug("$path: re-read");
+                ($etc_group_str, $etc_group_sign) = ($orig, $sign1);
+            }
+        }
+        my $new = "";
+
+        # replace lines related to managed groups
+        for (split /\n/, $orig) {
             if (!$shadow && /^(\w+):(\w+):(\d+):(.*?)(\s*)$/) {
                 my ($g, $x, $gid, $members, $eol) = ($1, $2, $3, $4, $5);
                 if ($lg_gid{$g}) {
                     # replace line with managed group
                     $gid = $lg_gid{$g};
-                    $new .= sprintf("%s:%s:%s:%s%s",
+                    $new .= sprintf("%s:%s:%s:%s%s\n",
                                 $g, $x, $lg_gid{$g},
                                 join(",", sort keys %{ $lg_members{$g} }),
                                 $eol);
@@ -259,47 +263,43 @@ sub update_etc_group (;$) {
             if ($shadow && /^(\w+):(.*)$/) {
                 delete $pending{$1} if $lg_gid{$1};
             }
-            $new .= $_;
+            $new .= $_ . "\n";
         }
-        close($file);
 
         # add remaining managed groups at the end
-        my $x = "x";
         for my $g (sort { $lg_gid{$a} <=> $lg_gid{$b} } keys %pending) {
             if ($shadow) {
                 $new .= "$g:!::\n";
             } else {
-                $new .= sprintf("%s:%s:%s:%s\n", $g, $x, $lg_gid{$g},
+                $new .= sprintf("%s:x:%s:%s\n", $g, $lg_gid{$g},
                                 join(",", sort keys %{ $lg_members{$g} }));
             }
         }
 
         # return if file should not change
         if ($orig eq $new) {
-            debug("$path: changes not needed");
+            debug("$path: no changes");
             last;
         }
 
         # create temporary file with new contents
         my $temp_path = "$path.$progname.$$";
         add_temp_file($temp_path);
-        open(my $temp_file, "> $temp_path")
+        my $sign3 = write_file($temp_path, $new)
             or fail("$temp_path: cannot create");
-        print $temp_file $new;
-        close($temp_file);
-
-        # keep file access the same
+        # keep file access
         chown($uid1, $gid1, $temp_path);
         chmod($mode1, $temp_path);
 
         # now check whether original file has changed
-        @st = stat($path);
-        my ($mode2, $uid2, $gid2, $size2, $mtime2) = @st[2,4,5,7,9];
-        my $stat_2 = "$mode2|$uid2|$gid2|$size2|$mtime2";
-        if ($stat_1 eq $stat_2) {
+        my ($sign2) = super_stat($path);
+        if ($sign1 eq $sign2) {
             # rename and clobber the original file
             rename($temp_path, $path)
                 or fail("cannot rename $temp_path to $path");
+            if (!$shadow) {
+                ($etc_group_str, $etc_group_sign) = ($new, $sign3);
+            }
             del_temp_file($temp_path);
             info("$path: modified successfully");
             invalidate_nscd() if $uw_config{update_nscd};
@@ -316,7 +316,7 @@ sub update_etc_group (;$) {
 #
 # invalidate nscd groups
 #
-sub invalidate_nscd {
+sub invalidate_nscd () {
     my $pid_path = $uw_config{nscd_pid_file};
     my $pid_file;
 	unless (open($pid_file, $pid_path)) {
@@ -368,25 +368,25 @@ sub get_skin_name () {
 #
 
 our (%local_users);
-my  ($passwd_modified_stamp);
+my  ($passwd_sign);
 
 sub get_local_users () {
     # check whether file was modified
     my $passwd_path = "/etc/passwd";
-    my $modified = -M($passwd_path);
-    return if $modified eq $passwd_modified_stamp;
-    $passwd_modified_stamp = $modified;
+    my ($sign) = super_stat($passwd_path);
+    return if $sign eq $passwd_sign;
+    $passwd_sign = $sign;
 
     # if the file was modified, refresh the hash
     debug("updating local user list");
     %local_users = ();
-    open(my $passwd_file, $passwd_path)
+    open(my $file, $passwd_path)
         or fail("$passwd_path: cannot open");
-    while (<$passwd_file>) {
+    while (<$file>) {
         next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):\d+:";
         $local_users{$1} = $2;
     }
-    close($passwd_file);
+    close($file);
 }
 
 ##############################################

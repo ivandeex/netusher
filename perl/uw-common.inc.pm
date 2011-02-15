@@ -191,10 +191,6 @@ sub _fmtmsg ($) {
                     $usec/1000, $$, $msg);
 }
 
-sub monotonic_time () {
-    return clock_gettime(CLOCK_MONOTONIC);
-}
-
 ##############################################
 # Event loop
 #
@@ -376,6 +372,18 @@ sub detach_stdio () {
     $uw_config{stdout} = 0;
 }
 
+sub end_daemon () {
+    unlink($_) for (keys %temp_files);
+    %temp_files = ();
+    return if $in_parent || $ev_reload;
+    unlink($uw_config{pid_file}) if $pid_written;
+    info("$progname finished");
+}
+
+##############################################
+# Utilities
+#
+
 sub create_parent_dir ($) {
     my ($path) = @_;
     (my $parent = $path) =~ s!/+[^/]*$!!;
@@ -389,14 +397,6 @@ sub create_parent_dir ($) {
     }
     (-d $parent) or fail("$parent: directory does not exist");
     (-w $parent) or fail("$parent: directory is not writable");
-}
-
-sub end_daemon () {
-    unlink($_) for (keys %temp_files);
-    %temp_files = ();
-    return if $in_parent || $ev_reload;
-    unlink($uw_config{pid_file}) if $pid_written;
-    info("$progname finished");
 }
 
 sub add_temp_file ($) {
@@ -425,16 +425,11 @@ sub run_prog ($;$) {
     }
     if ($out_ref && 1) {
         $SIG{PIPE} = "IGNORE";
-        my ($out, $file, $temp, $rs);
-        $temp = "/tmp/xxx.$progname.run.".time().".$$";
+        my $temp = "/tmp/xxx.$progname.run.".time().".$$";
         add_temp_file($temp);
         system("$cmd >$temp 2>&1");
         $kid = $?;
-        open($file, $temp);
-        $rs = $/; undef $/;
-        $out = <$file>; $$out_ref = $out; undef $out;
-        $/ = $rs;
-        close($file);
+        $$out_ref = read_all_file($temp);
         del_temp_file($temp);
     } else {
         system("$cmd >/dev/null 2>&1");
@@ -442,6 +437,38 @@ sub run_prog ($;$) {
     }
     my $ret = ($kid & 127) ? -2 : ($kid >> 8);
     return $ret;
+}
+
+sub super_stat ($) {
+    my ($path) = @_;
+    my @st = stat($path);
+    my ($mode, $uid, $gid, $size, $mtime, $ctime) = @st[2,4,5,7,9,10];
+    my $sign = "[$mode|$uid|$gid|$size|$mtime|$ctime]";
+    return ($sign, $mode, $uid, $gid);
+}
+
+sub read_file ($) {
+    my ($path) = @_;
+    open(my $file, $path) or return;
+    my $rs = $/;
+    undef $/;
+    my $out = <$file>;
+    $/ = $rs;
+    close($file);
+    return $out;
+}
+
+sub write_file ($$) {
+    my ($path, $out) = @_;
+    open(my $file, "> $path") or return;
+    print $file $out;
+    close($file);
+    my ($sign) = super_stat($path);
+    return $sign;
+}
+
+sub monotonic_time () {
+    return clock_gettime(CLOCK_MONOTONIC);
 }
 
 ##############################################
