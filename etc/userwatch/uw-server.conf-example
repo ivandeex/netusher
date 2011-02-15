@@ -1,6 +1,7 @@
 ##############################################
+# UserWatch
 # /etc/userwatch/uw-server.conf
-# Configuration file of the uw-client daemon
+# Configuration file of the uw-server daemon
 # $Id$
 #
 
