@@ -63,6 +63,7 @@ sub handle_gmirror_reply ($$$) {
             return;
         }
         $group_map->{$user} = [ @arr[$k .. ($k + $ngroups - 1)] ];
+        debug("gmirror(%s):%s", $user, join(",", @{ $group_map->{$user} }));
     }
 
     debug("gmirror reply ok ($ntokens tokens)");

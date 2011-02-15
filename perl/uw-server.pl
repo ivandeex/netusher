@@ -24,7 +24,8 @@ our ($ldap_child);
 our ($vpn_regex);
 
 our %cache_backend = (
-            get_user_uid    => \&ldap_get_user_uid
+            get_user_uid    => \&ldap_get_user_uid,
+            get_user_groups => \&ldap_get_user_groups
         );
 
 #
@@ -181,7 +182,7 @@ sub handle_request ($) {
 
     my $reply = "OK";
     if (&OPT_GET_GROUPS & $req->{opts}) {
-        my $group_map = get_user_groups($users);
+        my $group_map = inquire_groups($users);
         $reply .= ":~:" . scalar(keys %$group_map);
         for my $user (sort keys %$group_map) {
             my $groups = $group_map->{$user};
@@ -210,9 +211,7 @@ sub update_user_mapping ($$$) {
     # we prefer the one that has logged in earlier
     #
     my ($best);
-    for (my $i = 0; $i < scalar(@$users); $i++) {
-        my $u = $users->[$i];
-
+    for my $u (@$users) {
         # skip local users and users with id that does not match
         unless ($uw_config{also_local}) {
             my $uid = get_user_uid($u->{user});
@@ -328,15 +327,17 @@ sub main_loop () {
                 # required parameters
                 [ qw(
                     vpn_net mysql_host mysql_db mysql_user mysql_pass
-                    ldap_uri ldap_bind_dn ldap_bind_pass ldap_user_base
+                    ldap_uri ldap_bind_dn ldap_bind_pass
+                    ldap_user_base ldap_group_base
                 )],
                 # optional parameters
                 [ qw(
                     port ca_cert peer_pem idle_timeout rw_timeout
                     also_local syslog stdout debug stacktrace daemonize
-                    ldap_attr_user ldap_attr_uid ldap_start_tls ldap_timeout
-                    ldap_force_fork mysql_port uid_cache_ttl
-                    user_retention purge_interval
+                    ldap_attr_user ldap_attr_uid ldap_attr_group ldap_attr_member
+                    ldap_start_tls ldap_timeout ldap_force_fork
+                    uid_cache_ttl group_cache_ttl
+                    user_retention purge_interval mysql_port
                     iptables_user_vpn iptables_user_real
                     iptables_host_real iptables_status
                     vpn_scan_interval vpn_scan_pause

@@ -102,11 +102,37 @@ sub ldap_get_user_uid ($) {
         undef $uid if $uid eq "-";
     } else {
         my ($attr_user, $attr_uid) = @uw_config{qw(ldap_attr_user ldap_attr_uid)};
-        my (@res) = _ldap_search("($attr_user=$user)", [ $attr_uid ]);
+        my (@res) = _ldap_search(
+                            "($attr_user=$user)", [ $attr_uid ],
+                            $uw_config{ldap_user_base}
+                            );
         $msg = $res[0];
         $uid = $res[1]->{$attr_uid};
     }
     return ($uid, $msg);
+}
+
+#
+# return list of groups for a user
+#
+sub ldap_get_user_groups ($) {
+    my ($user) = @_;
+    my ($msg, @groups);
+
+    if ($ldap_parent) {
+        my $reply = _ldap_wait_reply("GROUPS $user");
+        ($msg, @groups) = split /\|/, $reply;
+    } else {
+        my ($attr_group, $attr_member)
+                = @uw_config{qw(ldap_attr_group ldap_attr_member)};
+        my (@res) = _ldap_search(
+                        "(&(objectClass=posixGroup)($attr_member=$user))",
+                        [ $attr_group ], $uw_config{ldap_group_base}
+                        );
+        $msg = shift @res;
+        push @groups, $_->{$attr_group} for (@res);
+    }
+    return ($msg, \@groups);
 }
 
 #
@@ -117,21 +143,27 @@ sub _ldap_child_loop () {
     while (<$ldap_sock>) {
         chomp;
         my @cmd = split / /;
+        my $op = $cmd[0];
         my ($quit, $reply);
-        if ($cmd[0] eq "QUIT") {
+
+        if ($op eq "QUIT") {
             $reply = "BYE";
             $quit = 1;
         }
-        elsif ($cmd[0] eq "HELLO") {
+        elsif ($op eq "HELLO") {
             $reply = "OK";
         }
-        elsif ($cmd[0] eq "UID") {
+        elsif ($op eq "UID") {
             my ($uid, $msg) = ldap_get_user_uid($cmd[1]);
             $uid = "-" if !defined($uid) || $uid eq "";
             $msg = "0" unless $msg;
             $reply = "$uid $msg";
+        } elsif ($op eq "GROUPS") {
+            my ($msg, $groups) = ldap_get_user_groups($cmd[1]);
+            $groups = [] unless $groups;
+            $reply = join("|", $msg, @$groups);
         }
-        elsif ($cmd[0] eq "AUTH") {
+        elsif ($op eq "AUTH") {
             $reply = ldap_auth($cmd[1], $cmd[2]);
         }
         else {
@@ -318,8 +350,8 @@ sub _ldap_connect ($$$$) {
 #
 # generic ldap search
 #
-sub _ldap_search ($$) {
-    my ($filter, $attrs) = @_;
+sub _ldap_search ($$$) {
+    my ($filter, $attrs, $base) = @_;
     my $res;
     # search in ldap.
     # ldap server might have disconnected due to timeout.
@@ -327,11 +359,12 @@ sub _ldap_search ($$) {
     for (my $try = 1; $try <= $ldap_maxtries; $try++) {
         if ($ldap_conn) {
             $res = $ldap_conn->search(
-                    base => $uw_config{ldap_user_base},
+                    base => $base,
                     filter => $filter,
                     scope => 'one', defer => 'never',
                     attrs => $attrs
                     );
+            #debug("ldap_search filter:$filter base:$base res=".$res->code());
         }
         if (!$ldap_conn || $res->code() == 1) {
             # unexpected eof. try to reconnect
@@ -354,6 +387,7 @@ sub _ldap_search ($$) {
         for my $attr (@$attrs) {
             $item->{$attr} = $entry->get_value($attr);
         }
+        #debug("ldap_search item: %s", join(",", map("$_:\"$item->{$_}\"", @$attrs)));
         push @res, $item;
     }
 
