@@ -59,7 +59,7 @@ pam_uwatch_la_LIBADD =
 am_pam_uwatch_la_OBJECTS = pam_uwatch_la-uw-pam.lo
 pam_uwatch_la_OBJECTS = $(am_pam_uwatch_la_OBJECTS)
 DEFAULT_INCLUDES = -I. -I$(srcdir) -I.
-depcomp = $(SHELL) $(top_srcdir)/config/depcomp
+depcomp = $(SHELL) $(top_srcdir)/autoconf/depcomp
 am__depfiles_maybe = depfiles
 COMPILE = $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) \
 	$(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
