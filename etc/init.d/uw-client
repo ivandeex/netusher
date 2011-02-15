@@ -10,7 +10,7 @@
 # pidfile: /var/run/userwatch/uw-client.pid
 
 RETVAL=0
-PROGRAM=/usr/share/userwatch/perl/uw-client.pl
+PROGRAM=/usr/share/userwatch/daemons/uw-client.pl
 PIDFILE=/var/run/userwatch/uw-client.pid
 prog="uw-client"
 

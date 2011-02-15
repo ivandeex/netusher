@@ -11,7 +11,7 @@
 # pidfile: /var/run/userwatch/uw-server.pid
 
 RETVAL=0
-PROGRAM=/usr/share/userwatch/perl/uw-server.pl
+PROGRAM=/usr/share/userwatch/daemons/uw-server.pl
 PIDFILE=/var/run/userwatch/uw-server.pid
 prog="uw-server"
 
