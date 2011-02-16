@@ -39,6 +39,8 @@ our %uw_config =
         iptables            => "/sbin/iptables",
         iptables_save       => "/sbin/iptables-save",
         nsupdate            => "/usr/bin/nsupdate",
+        etc_passwd          => "/etc/passwd",
+        etc_group           => "/etc/group",
 
         # common parameters
         port                => 7501,
@@ -102,6 +104,7 @@ our %uw_config =
         group_cache_ttl     => 2,
         user_retention      => 300,
         purge_interval      => 300,
+        authorize_permit    => 0,
 
         # server parameters (iptables)
         iptables_user_vpn   => "",
@@ -397,6 +400,42 @@ sub end_daemon () {
     return if $in_parent || $ev_reload;
     unlink($uw_config{pid_file}) if $pid_written;
     info("$progname finished");
+}
+
+##############################################
+# scan /etc/passwd and /etc/group
+#
+
+our (%local_users, %local_groups);
+our ($etc_passwd_str, $etc_group_str);
+my  ($etc_passwd_sign, $etc_group_sign);
+
+sub rescan_etc () {
+    my ($sign) = super_stat($uw_config{etc_passwd});
+    if ($sign ne $etc_passwd_sign) {
+        debug("refreshing local user list");
+        $etc_passwd_sign = $sign;
+        $etc_passwd_str = read_file($uw_config{etc_passwd})
+            or fail("$uw_config{etc_passwd}: cannot open");
+        %local_users = ();
+        for (split /\n/, $etc_passwd_str) {
+            next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):\d+:";
+            $local_users{$1} = $2;
+        }
+    }
+
+    ($sign) = super_stat($uw_config{etc_group});
+    if ($sign ne $etc_group_sign) {
+        debug("refreshing local group list");
+        $etc_group_sign = $sign;
+        $etc_group_str = read_file($uw_config{etc_group})
+            or fail("$uw_config{etc_group}: cannot open");
+        %local_groups = ();
+        for (split /\n/, $etc_group_str) {
+            next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):";
+            $local_groups{$1} = $2;
+        }
+    }
 }
 
 ##############################################

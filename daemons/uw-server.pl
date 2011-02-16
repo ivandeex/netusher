@@ -24,8 +24,9 @@ our ($ldap_child);
 our ($vpn_regex);
 
 our %cache_backend = (
-            get_user_uid_grp    => \&ldap_get_user_uid_grp,
-            get_user_groups     => \&ldap_get_user_groups
+            get_user_uid_grp    => \&nss_get_user_uid_grp,
+            get_user_groups     => \&nss_get_user_groups,
+            user_auth           => sub { "not implemented" }
         );
 
 #
@@ -167,8 +168,10 @@ sub handle_request ($) {
         return "invalid login time"
             if $usr->{beg_time} !~ /^\d+$/;
         # verify user password
-        my $msg = ldap_auth($usr->{user}, $usr->{pass});
-        return $msg if $msg;
+        unless ($uw_config{authorize_permit}) {
+            my $msg = &{$cache_backend{user_auth}}($usr->{user}, $usr->{pass});
+            return $msg if $msg;
+        }
         # add this user to the beginning of the big list
         unshift @$users, $usr;
     }
@@ -214,7 +217,7 @@ sub update_user_mapping ($$$) {
     for my $u (@$users) {
         # skip local users and users with id that does not match
         unless ($uw_config{also_local}) {
-            my $uid = get_user_uid($u->{user});
+            my $uid = get_user_uid_grp($u->{user}, undef);
             unless (defined $uid) {
                 debug("%s: skip local user", $u->{user});
                 next;
@@ -327,18 +330,19 @@ sub main_loop () {
                 # required parameters
                 [ qw(
                     vpn_net mysql_host mysql_db mysql_user mysql_pass
-                    ldap_uri ldap_bind_dn ldap_bind_pass
-                    ldap_user_base ldap_group_base
                 )],
                 # optional parameters
                 [ qw(
                     port ca_cert peer_pem idle_timeout rw_timeout
                     also_local syslog stdout debug stacktrace daemonize
+                    ldap_uri ldap_bind_dn ldap_bind_pass
+                    ldap_user_base ldap_group_base
                     ldap_attr_user ldap_attr_uid ldap_attr_gid
                     ldap_attr_group ldap_attr_member
                     ldap_start_tls ldap_timeout ldap_force_fork
                     uid_cache_ttl group_cache_ttl
-                    user_retention purge_interval mysql_port
+                    user_retention purge_interval
+                    mysql_port authorize_permit
                     iptables_user_vpn iptables_user_real
                     iptables_host_real iptables_status
                     vpn_scan_interval vpn_scan_pause
@@ -349,7 +353,14 @@ sub main_loop () {
     log_init();
 
     debug("setting up");
-    ldap_init(1);
+    if (defined ldap_init(1)) {
+        # switch from NSS to LDAP
+        %cache_backend = (
+            get_user_uid_grp    => \&ldap_get_user_uid_grp,
+            get_user_groups     => \&ldap_get_user_groups,
+            user_auth           => \&ldap_auth
+            );
+    }
     mysql_connect();
     ev_create_loop();
     vpn_init();

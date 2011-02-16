@@ -16,7 +16,7 @@ use Net::LDAP;
 use Socket;
 use IO::Handle;
 
-our (%uw_config);
+our (%uw_config, $config_file);
 
 my $ldap_maxtries = 2;
 my $ldap_try_delay = 0.100;
@@ -36,6 +36,16 @@ sub ldap_init ($) {
     }
 
     ldap_close();
+
+    if ($uw_config{ldap_uri}) {
+        for (qw[ldap_bind_dn ldap_bind_pass ldap_user_base ldap_group_base]) {
+            next if defined $uw_config{$_};
+            fail("$config_file: missing ldap parameter \"$_\"");
+        }
+    } else {
+        # ldap is not used
+        return undef;
+    }
 
     #
     # Due to a bug in Net::SSLeay SSL in OpenLDAP
@@ -95,7 +105,7 @@ sub ldap_auth ($$) {
 #
 sub ldap_get_user_uid_grp ($) {
     my ($user) = @_;
-    my ($uid, $grp, $msg);
+    my ($msg, $uid, $grp);
     if ($ldap_parent) {
         my $reply = _ldap_wait_reply("UID_GRP $user");
         ($msg, $uid, $grp) = split /\|/, $reply;
@@ -312,7 +322,10 @@ sub _ldap_init ($) {
         info("warning: ldap init failed: $msg");
     }
 
-    $ldap_conn = $conn unless $msg;
+    unless ($msg) {
+        $ldap_conn = $conn;
+        $msg = 0;
+    }
     return $msg;
 }
 

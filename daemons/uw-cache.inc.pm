@@ -11,7 +11,15 @@ require "$Bin/uw-common.inc.pm";
 
 use Digest::MD5 qw(md5_hex);
 
-our (%uw_config, %cache_backend);
+#
+# require: perl-User-getgrouplist
+#
+# you can obtain the modules from
+# http://rpm.vitki.net/pub/centos/5/i386/repoview/letter_p.group.html
+#
+use User::getgrouplist;
+
+our (%uw_config, %cache_backend, %local_groups);
 my  (%uid_grp_cache, %group_cache, %auth_cache);
 
 #
@@ -71,8 +79,10 @@ sub get_user_groups ($) {
     my $ttl = $uw_config{group_cache_ttl};
     if ($ttl > 0 && exists($group_cache{$user})) {
         if (monotonic_time() - $group_cache{$user}{stamp} < $ttl) {
-            debug("get_user_groups user:$user from:cache");
-            return $group_cache{$user}{groups};
+            $groups = $group_cache{$user}{groups};
+            debug("get_user_groups user:%s from:cache groups:%s",
+                    $user, join(",", @$groups));
+            return ;
         }
         delete $group_cache{$user};
     }
@@ -88,12 +98,13 @@ sub get_user_groups ($) {
         $group_cache{$user}{groups} = $groups;
         $group_cache{$user}{stamp} = monotonic_time();
     }
-    debug("get_user_groups user:$user from:backend");
+    debug("get_user_groups user:%s from:backend groups:%s",
+            $user, join(",", @$groups));
     return $groups;
 }
 
 #
-# return groups for a set of users
+# return groups for a set of users (user by server)
 #
 sub inquire_groups ($) {
     my ($users) = @_;
@@ -130,6 +141,40 @@ sub inquire_groups ($) {
     }
 
     return \%group_map;
+}
+
+#
+# NSS queries (used by server):
+# - uid/gid numbers for a user
+# - list of groups for a user
+#
+sub nss_get_user_uid_grp ($) {
+    my ($user) = @_;
+    my ($name, $pass, $uid, $gid) = getpwnam($user);
+    my ($msg, $grp);
+    if ($name) {
+        $grp = getgrgid($gid);
+        $grp = $gid unless $grp;
+    } else {
+        $msg = "not found";
+    }
+    return ($msg, $uid, $grp);
+}
+
+sub nss_get_user_groups ($) {
+    my ($user) = @_;
+    my @all_groups = getgrouplist($user);
+    my @global_groups;
+    rescan_etc();
+    for my $grp (@all_groups) {
+        if ($grp =~ /^\d+$/) {
+            $grp = getgrgid($grp);
+            next unless $grp;
+        }
+        next if $local_groups{$grp};
+        push @global_groups, $grp;
+    }
+    return (0, \@global_groups);
 }
 
 #

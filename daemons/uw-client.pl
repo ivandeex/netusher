@@ -75,7 +75,7 @@ sub update_active_users ($) {
     my ($chan) = @_;
     debug("update active users");
     return "no connection" unless $srv_chan;
-    get_local_users();
+    rescan_etc();
     my $req = create_request("C", undef, undef, &OPT_USER_LIST | $opt_gmirror);
     queue_job($req, $chan);
     # return nothing for channel to wait for server reply
@@ -84,7 +84,7 @@ sub update_active_users ($) {
 
 sub user_login ($$$$$) {
     my ($method, $user, $pass, $uid, $chan) = @_;
-    get_local_users();
+    rescan_etc();
     if (!$uw_config{also_local} && exists($local_users{$user})) {
         debug("$user: local user login");
         return "OK";
@@ -111,7 +111,7 @@ sub user_logout ($$$) {
     my ($method, $user, $chan) = @_;
 
     # if this user is local, don't bother the server
-    get_local_users();
+    rescan_etc();
     if (!$uw_config{also_local} && exists($local_users{$user})) {
         debug("$user: local user logout");
         return "local";

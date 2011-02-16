@@ -60,6 +60,17 @@
 # Default: 300 seconds
 #purge_interval = 600
 
+# Parameters: uid_cache_ttl, gid_cache_ttl
+# The daemon can internally cache results of such LDAP queries
+# (or NSS queries if LDAP is not used directly) as finding a user id
+# and user group id by user name, or enumerating members of a group.
+# The default value of 2 seconds simply avoids repetitive LDAP/NSS
+# queries during a single client request.
+# Setting this to 0 completely disables caching.
+# Default: 2 seconds
+#uid_cache_ttl = 300
+#group_cache_ttl = 300
+
 # Parameter: pid_file
 # Defines file where server daemon will record process id after
 # going background. You are not supposed to change this parameter.
@@ -235,7 +246,9 @@ vpn_net = 192.168.0.0
 # for SSL (ldaps) connections. Please note that due to a bug in
 # the Perl SSL implementation, the daemon will fork before opening
 # ldaps connection, increasing total memory footprint.
-# Default: none, required
+# If this parameter is empty or not set, the server will not connect
+# to LDAP and use normal NSS instead.
+# Default: none, optional
 ldap_uri = ldap://ldap.company.com
 
 # Parameter: ldap_start_tls
@@ -251,26 +264,16 @@ ldap_uri = ldap://ldap.company.com
 
 # Parameters: ldap_bind_dn, ldap_bind_pass
 # These parameters define DN and password for LDAP connection.
-# Default: none, required
+# Default: none, required if ldap_uri is set.
 ldap_bind_dn = cn=bindn,dc=company,dc=com
 ldap_bind_pass = secret
 
 # Parameters: ldap_user_base, ldap_group_base
 # These parameters define base in the LDAP tree for searching for
 # user and group entries.
-# Default: none, required
+# Default: none, required if ldap_uri is set.
 ldap_user_base = ou=users,dc=company,dc=com
 ldap_group_base = ou=groups,dc=company,dc=com
-
-# Parameters: uid_cache_ttl, gid_cache_ttl
-# The daemon can internally cache results of such LDAP queries
-# as finding a user id and user group id by user name, or
-# enumerating members of a group.
-# The default value of 2 seconds simply avoids repetitive LDAP queries
-# during a single client request. Setting to 0 disables caching.
-# Default: 2 seconds
-#uid_cache_ttl = 300
-#group_cache_ttl = 300
 
 # Parameters: ldap_attr_user, ldap_attr_uid, ldap_attr_gid,
 #             ldap_attr_group, ldap_attr_member
@@ -300,6 +303,13 @@ ldap_group_base = ou=groups,dc=company,dc=com
 # You are not supposed to use it. 
 # Default: 0
 #ldap_force_fork = 1
+
+# Parameter: authorize_permit
+# Normally user authorization requests are passed to LDAP.
+# If this parameter is 1, server will bypass authorization and always
+# declare success. Warning: this setting is for test only!
+# Default: 0
+#authorize_permit = 1
 
 # Parameter: daemonize
 # Normally the program detaches from console after setup and runs in

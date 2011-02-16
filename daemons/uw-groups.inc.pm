@@ -18,13 +18,13 @@ require "$Bin/uw-common.inc.pm";
 use User::Utmp qw(:constants :utmpx);
 
 our (%uw_config, $progname);
+our ($etc_group_str, $etc_group_sign, %local_users);
 
 ##############################################
 # group mirroring
 #
 
 my ($skin_name, %lg_gid, %lg_members, %group_to_lg, %user_groups);
-my ($etc_group_str, $etc_group_sign);
 
 sub gmirror_init () {
     # detect our skin
@@ -279,23 +279,20 @@ sub update_etc_group (;$) {
     }
 
     while (1) {
+        my ($new, $orig, $sign1, %pending);
+
         # list of managed groups to be added at the end
-        my %pending;
         $pending{$_} = 1 for (keys %lg_gid);
 
         # read group file, inquire access mode and owners
-        my ($sign1, $mode1, $uid1, $gid1) = super_stat($path);
-        my $orig;
-        if ($sign1 eq $etc_group_sign && !$shadow) {
-            $orig = $etc_group_str;
-        } else {
+        if ($shadow) {
+            ($sign1) = super_stat($path);
             $orig = read_file($path) or fail("$path: cannot open");
-            if (!$shadow) {
-                debug("$path: re-read");
-                ($etc_group_str, $etc_group_sign) = ($orig, $sign1);
-            }
+        } else {
+            rescan_etc();
+            $orig = $etc_group_str;
+            $sign1 = $etc_group_sign;
         }
-        my $new = "";
 
         # replace lines related to managed groups
         for (split /\n/, $orig) {
@@ -339,14 +336,13 @@ sub update_etc_group (;$) {
         add_temp_file($temp_path);
         my $sign3 = write_file($temp_path, $new)
             or fail("$temp_path: cannot create");
-        # keep file access
-        chown($uid1, $gid1, $temp_path);
-        chmod($mode1, $temp_path);
 
         # now check whether original file has changed
-        my ($sign2) = super_stat($path);
+        my ($sign2, $f_mode, $f_uid, $f_gid) = super_stat($path);
         if ($sign1 eq $sign2) {
-            # rename and clobber the original file
+            # keep original file access, rename and clobber the original file
+            chown($f_uid, $f_gid, $temp_path);
+            chmod($f_mode, $temp_path);
             rename($temp_path, $path)
                 or fail("cannot rename $temp_path to $path");
             if (!$shadow) {
@@ -416,36 +412,10 @@ sub get_skin_name () {
 }
 
 ##############################################
-# scan /etc/passwd
-#
-
-our (%local_users);
-my  ($passwd_sign);
-
-sub get_local_users () {
-    # check whether file was modified
-    my $passwd_path = "/etc/passwd";
-    my ($sign) = super_stat($passwd_path);
-    return if $sign eq $passwd_sign;
-    $passwd_sign = $sign;
-
-    # if the file was modified, refresh the hash
-    debug("updating local user list");
-    %local_users = ();
-    open(my $file, $passwd_path)
-        or fail("$passwd_path: cannot open");
-    while (<$file>) {
-        next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):\d+:";
-        $local_users{$1} = $2;
-    }
-    close($file);
-}
-
-##############################################
 # scan /var/utmpx
 #
 sub get_active_users () {
-    get_local_users();
+    rescan_etc();
     my @user_list;
 
     # scan utmpx
