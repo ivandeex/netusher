@@ -60,13 +60,14 @@ sub handle_unix_request ($$) {
 #
 # handle extra fields of the reply from server
 #
-sub handle_reply ($$$) {
-    my ($job, $p, $reply) = @_;
-    if ($p->{message}) {
-        info("%s: %s", $p->{message}, $reply);
+sub handle_reply ($$) {
+    my ($job, $reply) = @_;
+    if ($job->{message}) {
+        info($job->{message} . ": " . $reply);
     }
-    if ($p->{user} && $p->{pass}) {
-        update_auth_cache($p->{user}, $p->{uid}, $p->{pass}, $reply);
+    if ($job->{usr}{cmd} eq "I") {
+        my $usr = $job->{usr};
+        update_auth_cache($usr->{user}, $usr->{uid}, $usr->{pass}, $reply);
     }
     gmirror_apply($job) if $uw_config{enable_gmirror};
 }
@@ -77,7 +78,7 @@ sub update_active_users ($) {
     return "no connection" unless $srv_chan;
     rescan_etc();
     my $req = create_request("C", undef, undef, &OPT_USER_LIST | $opt_gmirror);
-    queue_job($req, $chan);
+    queue_job($req, $chan, undef, undef);
     # return nothing for channel to wait for server reply
     return;
 }
@@ -89,7 +90,9 @@ sub user_login ($$$$$) {
         debug("$user: local user login");
         return "OK";
     }
+
     my $usr = {
+        cmd => "I",
         method => $method,
         user => $user,
         pass => $pass,
@@ -98,11 +101,11 @@ sub user_login ($$$$$) {
     my $req = create_request("I", time(), $usr, $opt_gmirror);
     if (check_auth_cache($user, $uid, $pass) == 0) {
         info("$user: user login: OK (cached)");
-        queue_job($req, undef);
+        queue_job($req, undef, $usr, undef);
         return "OK";
     }
-    queue_job($req, $chan, message => "$user: user login",
-                user => $user, uid => $uid, pass => $pass);
+
+    queue_job($req, $chan, $usr, "$user: user login");
     # return nothing for channel to wait for server reply
     return;
 }
@@ -125,11 +128,15 @@ sub user_logout ($$$) {
         }
     }
 
-    my $usr = { method => $method, user => $user, uid => "" };
+    my $usr = {
+        cmd => "O",
+        method => $method,
+        user => $user,
+        uid => ""
+        };
     my $req = create_request("O", undef, $usr,  0);
-    queue_job($req, $chan, message => "$user: user logout",
-                user => $user, method => $method);
-    # return nothing for channel to wait for server reply
+    queue_job($req, $chan, $usr, "$user: user logout");
+    # return nothing so that channel will wait for server reply
     return;
 }
 
@@ -187,13 +194,14 @@ sub get_ip_list () {
 # job queue
 #
 
-sub queue_job ($$%) {
-    my ($req, $chan, %params) = @_;
+sub queue_job ($$$$) {
+    my ($req, $chan, $usr, $message) = @_;
     push @jobs, {
         req => $req,
         chan => $chan,
+        usr => $usr,
         source => $chan ? $chan->{addr} : "none",
-        params => \%params
+        message => $message
         };
     handle_next_job();
 }
@@ -333,11 +341,14 @@ sub _srv_read_done ($$$) {
     debug("%s: got reply \"%s\" for %s", $chan->{addr}, $reply, $job->{source});
     my @parts = split /:/, $reply;
     $reply = shift @parts;
-    unix_write_reply($job->{chan}, $reply)
-        if $job->{chan};
-    handle_gmirror_reply(\@parts)
-        if @parts && $uw_config{enable_gmirror};
-    handle_reply($job, $job->{params}, $reply);
+
+    if ($job->{chan}) {
+        unix_write_reply($job->{chan}, $reply);
+    }
+    if (@parts && $uw_config{enable_gmirror}) {
+        handle_gmirror_reply(\@parts);
+    }
+    handle_reply($job, $reply);
 
     undef $job;
     handle_next_job();

@@ -407,13 +407,12 @@ sub end_daemon () {
 #
 
 our (%local_users, %local_groups);
-our ($etc_passwd_str, $etc_group_str);
-my  ($etc_passwd_sign, $etc_group_sign);
+our ($etc_passwd_str, $etc_passwd_sign);
+our ($etc_group_str, $etc_group_sign);
 
 sub rescan_etc () {
     my ($sign) = super_stat($uw_config{etc_passwd});
     if ($sign ne $etc_passwd_sign) {
-        debug("refreshing local user list");
         $etc_passwd_sign = $sign;
         $etc_passwd_str = read_file($uw_config{etc_passwd})
             or fail("$uw_config{etc_passwd}: cannot open");
@@ -422,19 +421,20 @@ sub rescan_etc () {
             next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):\d+:";
             $local_users{$1} = $2;
         }
+        debug("local users: " . join(",", sort keys %local_users));
     }
 
     ($sign) = super_stat($uw_config{etc_group});
     if ($sign ne $etc_group_sign) {
-        debug("refreshing local group list");
         $etc_group_sign = $sign;
         $etc_group_str = read_file($uw_config{etc_group})
             or fail("$uw_config{etc_group}: cannot open");
         %local_groups = ();
         for (split /\n/, $etc_group_str) {
-            next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):";
+            next unless m"^([\w\d\.\-_]+):\w+:(\d+):";
             $local_groups{$1} = $2;
         }
+        debug("local groups: " . join(",", sort keys %local_groups));
     }
 }
 

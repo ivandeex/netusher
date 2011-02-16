@@ -18,7 +18,7 @@ require "$Bin/uw-common.inc.pm";
 use User::Utmp qw(:constants :utmpx);
 
 our (%uw_config, $progname);
-our ($etc_group_str, $etc_group_sign, %local_users);
+our ($etc_group_str, $etc_group_sign, %local_users, %local_groups);
 
 ##############################################
 # group mirroring
@@ -80,15 +80,16 @@ sub gmirror_apply ($) {
     my ($job) = @_;
     my (%users_set, $off_user, $off_method);
 
-    if (defined($job) && defined($job->{params})) {
-        my $p = $job->{params};
-        if (defined($p->{user}) && defined($p->{pass})) {
-            # this is login
-            $users_set{$p->{user}} = 1;
+    if (defined $job->{usr}) {
+        my $usr = $job->{usr};
+        if ($usr->{cmd} eq "I") {
+            $users_set{$usr->{user}} = 1;
+            debug("gmirror include user:%s", $usr->{user});
         }
-        elsif (defined($p->{user} && defined($p->{method}))) {
+        elsif ($usr->{cmd} eq "O") {
             # this is logout
-            ($off_user, $off_method) = ($p->{user}, $p->{method});
+            ($off_user, $off_method) = ($usr->{user}, $usr->{method});
+            debug("gmirror exclude user:$off_user method:$off_method");
         }
     }
 
@@ -107,12 +108,12 @@ sub gmirror_apply ($) {
     $lg_members{$_} = {} for (keys %lg_gid);
 
     # apply rules
-    for my $user (sort keys %users_set) {
+    for my $user (keys %users_set) {
         my %lgroups;
         next unless defined $user_groups{$user};
         for my $group (@{ $user_groups{$user} }) {
             next unless defined $group_to_lg{$group};
-            for my $lgroup (%{ $group_to_lg{$group} }) {
+            for my $lgroup (keys %{ $group_to_lg{$group} }) {
                 $lg_members{$lgroup}{$user} = 1;
             }
         }
@@ -256,13 +257,16 @@ sub parse_gmirror_rules () {
                 join(", ", map("$_=$lg_gid{$_}",
                     sort { $lg_gid{$a} <=> $lg_gid{$b} } keys %lg_gid)
                 ));
-        for $src (keys %group_to_lg) {
-            debug("group mapping $src: ".
-                join(",", sort { $lg_gid{$a} <=> $lg_gid{$b} }
-                            keys %{ $group_to_lg{$src} }
-                ));
-        }
+        dump_rules(\%group_to_lg, "group mapping");
     }
+}
+
+sub dump_rules ($$) {
+    my ($map, $msg) = @_;
+    return unless $uw_config{debug};
+    debug("$msg: " .
+        join("; ", map { "$_:" . join(",", (sort keys %{$map->{$_}})) }
+                    (sort keys %$map)));
 }
 
 #
@@ -270,7 +274,7 @@ sub parse_gmirror_rules () {
 #
 sub update_etc_group (;$) {
     my ($shadow) = @_;
-    my $path = $shadow ? "/etc/gshadow" : "/etc/group";
+    my $path = $shadow ? "/etc/gshadow" : $uw_config{etc_group};
 
     # /etc/gshadow is optional, update only if exists...
     if ($shadow && !(-r $path)) {
@@ -290,8 +294,7 @@ sub update_etc_group (;$) {
             $orig = read_file($path) or fail("$path: cannot open");
         } else {
             rescan_etc();
-            $orig = $etc_group_str;
-            $sign1 = $etc_group_sign;
+            ($orig, $sign1) = ($etc_group_str, $etc_group_sign);
         }
 
         # replace lines related to managed groups
@@ -339,6 +342,7 @@ sub update_etc_group (;$) {
 
         # now check whether original file has changed
         my ($sign2, $f_mode, $f_uid, $f_gid) = super_stat($path);
+
         if ($sign1 eq $sign2) {
             # keep original file access, rename and clobber the original file
             chown($f_uid, $f_gid, $temp_path);
@@ -347,6 +351,7 @@ sub update_etc_group (;$) {
                 or fail("cannot rename $temp_path to $path");
             if (!$shadow) {
                 ($etc_group_str, $etc_group_sign) = ($new, $sign3);
+                $local_groups{$_} = $lg_gid{$_} for (keys %lg_gid);
             }
             del_temp_file($temp_path);
             info("$path: modified successfully");
