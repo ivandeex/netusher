@@ -82,12 +82,11 @@ sub gmirror_apply ($) {
 
     if (defined $job->{usr}) {
         my $usr = $job->{usr};
-        if ($usr->{cmd} eq "I") {
+        if ($usr->{cmd} eq "login") {
             $users_set{$usr->{user}} = 1;
             debug("gmirror include user:%s", $usr->{user});
         }
-        elsif ($usr->{cmd} eq "O") {
-            # this is logout
+        elsif ($usr->{cmd} eq "logout") {
             ($off_user, $off_method) = ($usr->{user}, $usr->{method});
             debug("gmirror exclude user:$off_user method:$off_method");
         }
@@ -433,12 +432,12 @@ sub get_active_users () {
         # detect login methos
         my $method;
         my $id = $ut->{ut_id};
-        if ($id =~ m"^s/\d+$") { $method = "RSH" }
-        elsif ($id =~ m"^\d+$") { $method = "CON" }
-        elsif ($id =~ m"^:\d+(\.\d+)?$") { $method = "XDM" }
-        elsif ($id =~ m"^/\d+$") { $method = "XTY" }
-        elsif ($ut->{ut_addr}) { $method = "RSH" }
-        else { $method = "UNK" }
+        if ($id =~ m"^s/\d+$") { $method = "net" }
+        elsif ($id =~ m"^\d+$") { $method = "con" }
+        elsif ($id =~ m"^:\d+(\.\d+)?$") { $method = "xdm" }
+        elsif ($id =~ m"^/\d+$") { $method = "pty" }
+        elsif ($ut->{ut_addr}) { $method = "net" }
+        else { $method = "unk" }
 
         # detect user id
         my $uid = "";

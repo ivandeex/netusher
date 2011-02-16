@@ -35,13 +35,13 @@ our %cache_backend = (
 # If several users are active, prefer user which has logged in earlier.
 #
 
-my %login_method_weight = (
-    'XDM' => 5,
-    'RSH' => 4,
-    'CON' => 2,
-    'XTY' => 1,
+my %method_weight = (
+    'xdm' => 5,
+    'net' => 4,
+    'con' => 3,
+    'pty' => 2,
     );
-my $min_login_weight = 4;
+my $min_method_weight = 4;
 
 ##############################################
 # requests
@@ -62,10 +62,11 @@ sub parse_request ($) {
         if $arr[7] ne '~' || $arr[$#arr] ne "~" || $arr[$arr[8] + 9] ne "~";
 
     # command
-    my $cmd = $arr[0];
-    return "invalid command"
-        if length($cmd) != 1 || index("IOC", $cmd) < 0;
+    my ($cmd, $opts) = @arr[0,1];
     my $opts = $arr[1];
+    unless ($cmd eq "login" || $cmd eq "logout" || $cmd eq "update") {
+        return "invalid command";
+    }
 
     # logon user
     my $usr = {
@@ -150,7 +151,7 @@ sub handle_request ($) {
         unless defined $vpn_ip;
     debug("client vpn ip: $vpn_ip");
 
-    if ($cmd eq 'I' || $cmd eq 'O') {
+    if ($cmd eq "login" || $cmd eq "logout") {
         # first, verify that user exists at all
         my $uid = get_user_uid_grp($usr->{user}, undef);
         return "user not found" unless defined $uid;
@@ -163,7 +164,7 @@ sub handle_request ($) {
         }
     }
 
-    if ($cmd eq 'I') {
+    if ($cmd eq "login") {
         # verify login time
         return "invalid login time"
             if $usr->{beg_time} !~ /^\d+$/;
@@ -176,7 +177,7 @@ sub handle_request ($) {
         unshift @$users, $usr;
     }
 
-    if ($cmd eq 'O') {
+    if ($cmd eq "logout") {
         # user logout
         $users = [ $usr ];
     }
@@ -250,12 +251,12 @@ sub update_user_mapping ($$$) {
     debug("best: user:%s method:%s id:%s beg_time:%s weight:%s cmd:%s",
             $best->{user}, $best->{method}, $best->{uid},
             $best->{beg_time}, $best_weight, $cmd);
-    if ($best_weight < $min_login_weight) {
+    if ($best_weight < $min_method_weight) {
         # if weight is less then allowed, remove the user from database
-        $cmd = 'O';
+        $cmd = "logout";
     }
 
-    if ($cmd eq 'I' || $cmd eq 'C') {
+    if ($cmd eq "login" || $cmd eq "logout") {
         # if there were previous active users, end their sessions
         mysql_execute(
             "UPDATE uw_users
@@ -276,7 +277,7 @@ sub update_user_mapping ($$$) {
     }
 
     # logout: update existing user record
-    if ($cmd eq 'O') {
+    if ($cmd eq "logout") {
         mysql_execute(
             "UPDATE uw_users SET end_time = NOW(), running = 0
             WHERE username = ? AND vpn_ip = ?
@@ -302,7 +303,7 @@ sub purge_expired_users () {
 sub login_weight ($) {
     my ($u) = @_;
     return 0 if !defined($u) || !defined($u->{method});
-    my $weight = $login_method_weight{$u->{method}};
+    my $weight = $method_weight{$u->{method}};
     return defined($weight) ? $weight : 0;
 }
 

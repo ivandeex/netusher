@@ -44,10 +44,10 @@ sub handle_unix_request ($$) {
         $req =~ s/^\s*\w+\s+//;
         return $req;
     } elsif ($cmd eq "login") {
-        return $#arg != 3 ? "usage: login XDM|RSH|CON user pass"
+        return $#arg != 3 ? "usage: login xdm|net|con|pty user pass"
                     : user_login($arg[1], $arg[2], $arg[3], undef, $chan);
     } elsif ($cmd eq "logout") {
-        return $#arg != 2 ? "usage: logout XDM|RSH|CON user"
+        return $#arg != 2 ? "usage: logout xdm|net|con|pty user"
                     : user_logout($arg[1], $arg[2], $chan);
     } elsif ($cmd eq "update") {
         return $#arg != 0 ? "usage: update"
@@ -65,7 +65,7 @@ sub handle_reply ($$) {
     if ($job->{message}) {
         info($job->{message} . ": " . $reply);
     }
-    if ($job->{usr}{cmd} eq "I") {
+    if ($job->{usr}{cmd} eq "login") {
         my $usr = $job->{usr};
         update_auth_cache($usr->{user}, $usr->{uid}, $usr->{pass}, $reply);
     }
@@ -77,7 +77,8 @@ sub update_active_users ($) {
     debug("update active users");
     return "no connection" unless $srv_chan;
     rescan_etc();
-    my $req = create_request("C", undef, undef, &OPT_USER_LIST | $opt_gmirror);
+    my $req = create_request("update", undef, undef,
+                                &OPT_USER_LIST | $opt_gmirror);
     queue_job($req, $chan, undef, undef);
     # return nothing for channel to wait for server reply
     return;
@@ -92,13 +93,13 @@ sub user_login ($$$$$) {
     }
 
     my $usr = {
-        cmd => "I",
+        cmd => "login",
         method => $method,
         user => $user,
         pass => $pass,
         uid => $uid
         };
-    my $req = create_request("I", time(), $usr, $opt_gmirror);
+    my $req = create_request("login", time(), $usr, $opt_gmirror);
     if (check_auth_cache($user, $uid, $pass) == 0) {
         info("$user: user login: OK (cached)");
         queue_job($req, undef, $usr, undef);
@@ -129,12 +130,12 @@ sub user_logout ($$$) {
     }
 
     my $usr = {
-        cmd => "O",
+        cmd => "logout",
         method => $method,
         user => $user,
         uid => ""
         };
-    my $req = create_request("O", undef, $usr,  0);
+    my $req = create_request("logout", undef, $usr,  0);
     queue_job($req, $chan, $usr, "$user: user logout");
     # return nothing so that channel will wait for server reply
     return;
