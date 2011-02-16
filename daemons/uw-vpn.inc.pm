@@ -465,6 +465,9 @@ sub iptables_init () {
     $chains_enable = (%chains_all ? 1 : 0);
     return unless $chains_enable;
 
+    require_program("iptables");
+    require_program("iptables_save");
+
     # consistency check
     for my $chain (qw[PREROUTING INPUT FORWARD OUTPUT POSTROUTING]) {
         fail("$chain: refusing to manage internal system chain")

@@ -495,11 +495,8 @@ sub main_loop () {
                     also_local syslog stdout debug stacktrace daemonize
                     connect_interval update_interval auth_cache_ttl
                     enable_gmirror gmirror_conf update_nscd nscd_pid_file
-                )],
-                # required programs
-                [ qw(
-                    ifconfig
                 )]);
+    require_program("ifconfig");
     log_init();
 
     debug("setting up");

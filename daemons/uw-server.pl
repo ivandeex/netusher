@@ -344,10 +344,6 @@ sub main_loop () {
                     vpn_scan_interval vpn_scan_pause
                     vpn_cfg_mask vpn_status_file
                     vpn_event_dir vpn_event_mask vpn_archive_dir
-            )],
-                # required programs
-                [ qw(
-                    iptables
                 )]);
     log_init();
 

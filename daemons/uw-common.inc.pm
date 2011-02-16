@@ -64,12 +64,14 @@ our %uw_config =
         update_nscd     => 1,
         nscd_pid_file   => "/var/run/nscd/nscd.pid",
 
-        # server parameters
+        # server parameters (mysql)
         mysql_host      => "localhost",
         mysql_port      => 3306,
         mysql_db        => undef,
         mysql_user      => undef,
         mysql_pass      => undef,
+
+        # server parameters (vpn)
         vpn_net         => undef,
         vpn_scan_interval   => 0,
         vpn_scan_pause      => 3,
@@ -78,6 +80,8 @@ our %uw_config =
         vpn_event_dir       => $status_root,
         vpn_event_mask      => "openvpn-event.*",
         vpn_archive_dir     => undef,
+
+        # server parameters (ldap)
         ldap_uri        => undef,
         ldap_bind_dn    => undef,
         ldap_bind_pass  => undef,
@@ -91,10 +95,14 @@ our %uw_config =
         ldap_attr_group => 'cn',
         ldap_attr_member=> 'memberUid',
         ldap_timeout    => 5,
+
+        # server parameters (operation)
         uid_cache_ttl   => 2,
         group_cache_ttl => 2,
         user_retention  => 300,
         purge_interval  => 300,
+
+        # server parameters (iptables)
         iptables_user_vpn   => '',
         iptables_user_real  => '',
         iptables_host_real  => '',
@@ -103,8 +111,8 @@ our %uw_config =
         # end of parameters
     );
 
-sub read_config ($$$$) {
-    my ($config, $required, $optional, $programs) = @_;
+sub read_config ($$$) {
+    my ($config, $required, $optional) = @_;
     my (%h_required, %h_allowed);
     $h_allowed{$_} = 1 for (@$required, @$optional);
     $h_required{$_} = 1 for (@$required);
@@ -133,11 +141,12 @@ sub read_config ($$$$) {
     }
 
     $uw_config{stdout} = 1 unless $uw_config{syslog};
+}
 
-    for my $prog (@$programs) {
-        my $path = $uw_config{$prog};
-        fail("$path: required program not found") unless -x $path;
-    }
+sub require_program ($) {
+    my ($prog) = @_;
+    my $path = $uw_config{$prog};
+    fail("$path: required program not found") unless -x $path;
 }
 
 ##############################################
