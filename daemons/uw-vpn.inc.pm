@@ -319,6 +319,7 @@ sub vpn_connected ($%) {
         $vpn_session{$vpn_ip}{real_ip} = $arg{real_ip};
         $vpn_session{$vpn_ip}{cname} = $arg{cname};
         iptables_update($vpn_ip, 0, 1);
+        dyndns_update(1, $arg{real_ip}, $arg{cname});
         $modified = 1;
     }
 
@@ -363,11 +364,40 @@ sub vpn_disconnected ($%) {
         }
         debug("$count vpn sessions still use real ip $arg{real_ip}");
         iptables_update($vpn_ip, 0, $count);
+        dyndns_update(0, $arg{real_ip}, $arg{cname});
         delete $vpn_session{$vpn_ip};
         $modified = 1;
     }
 
     return $modified;
+}
+
+##############################################
+# Dynamic DNS
+#
+
+sub dyndns_init () {
+    return unless $uw_config{ns_zone_real};
+    require_program("nsupdate")
+}
+
+sub dyndns_update ($$$) {
+    my ($enable, $real_ip, $cname) = @_;
+    return unless $uw_config{ns_zone_real};
+
+    $cname =~ s/^client-//;
+    my $host = "${cname}.$uw_config{ns_zone_real}";
+
+    my $cmd = "server $uw_config{ns_server}\n";
+    $cmd .= "zone $uw_config{ns_zone_real}\n";
+    $cmd .= "update delete $host A\n";
+    $cmd .= "update add $host $uw_config{ns_rr_time} A $real_ip\n" if $enable;
+    $cmd .= "send\n";
+
+    my $temp = add_temp_file(undef);
+    write_file($temp, $cmd);
+    run_prog("$uw_config{nsupdate} $temp");
+    del_temp_file($temp);
 }
 
 ##############################################

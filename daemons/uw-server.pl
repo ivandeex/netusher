@@ -344,6 +344,7 @@ sub main_loop () {
                     vpn_scan_interval vpn_scan_pause
                     vpn_cfg_mask vpn_status_file
                     vpn_event_dir vpn_event_mask vpn_archive_dir
+                    ns_server ns_zone_real ns_rr_time
                 )]);
     log_init();
 
@@ -353,6 +354,7 @@ sub main_loop () {
     ev_create_loop();
     vpn_init();
     iptables_init();
+    dyndns_init();
 
     if (daemonize()) {
         # clone dbi-mysql and event loop in the child

@@ -28,8 +28,8 @@ our $progname = $0;
 $progname =~ s!.*/!!g;
 $progname =~ s!\..*$!!g;
 
-our $config_root = '/etc/userwatch';
-our $status_root = '/var/run/userwatch';
+our $config_root = "/etc/userwatch";
+our $status_root = "/var/run/userwatch";
 our $config_file = "$config_root/$progname.conf";
 
 our %uw_config =
@@ -38,6 +38,7 @@ our %uw_config =
         ifconfig        => "/sbin/ifconfig",
         iptables        => "/sbin/iptables",
         iptables_save   => "/sbin/iptables-save",
+        nsupdate        => "/usr/bin/nsupdate",
 
         # common parameters
         port            => 7501,
@@ -89,11 +90,11 @@ our %uw_config =
         ldap_force_fork => 0,
         ldap_user_base  => undef,
         ldap_group_base => undef,
-        ldap_attr_user  => 'uid',
-        ldap_attr_uid   => 'uidNumber',
-        ldap_attr_gid   => 'gidNumber',
-        ldap_attr_group => 'cn',
-        ldap_attr_member=> 'memberUid',
+        ldap_attr_user  => "uid",
+        ldap_attr_uid   => "uidNumber",
+        ldap_attr_gid   => "gidNumber",
+        ldap_attr_group => "cn",
+        ldap_attr_member=> "memberUid",
         ldap_timeout    => 5,
 
         # server parameters (operation)
@@ -103,10 +104,15 @@ our %uw_config =
         purge_interval  => 300,
 
         # server parameters (iptables)
-        iptables_user_vpn   => '',
-        iptables_user_real  => '',
-        iptables_host_real  => '',
+        iptables_user_vpn   => "",
+        iptables_user_real  => "",
+        iptables_host_real  => "",
         iptables_status     => "$status_root/$progname.iptables",
+
+        # server parameters (dns)
+        ns_server       => "127.0.0.1",
+        ns_zone_real    => undef,
+        ns_rr_time      => 600,
 
         # end of parameters
     );
@@ -410,7 +416,10 @@ sub create_parent_dir ($) {
 
 sub add_temp_file ($) {
     my ($temp) = @_;
+    $temp = "/tmp/xxx.$progname.run.".time().".$$"
+        unless defined $temp;
     $temp_files{$temp} = 1;
+    return $temp;
 }
 
 sub del_temp_file ($) {
@@ -433,8 +442,7 @@ sub run_prog ($;$) {
         return -1;
     }
     if ($out_ref && 1) {
-        my $temp = "/tmp/xxx.$progname.run.".time().".$$";
-        add_temp_file($temp);
+        my $temp = add_temp_file(undef);
         system("$cmd >$temp 2>&1");
         $kid = $?;
         $$out_ref = read_file($temp);

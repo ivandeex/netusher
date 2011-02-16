@@ -203,6 +203,29 @@ vpn_net = 192.168.0.0
 #iptables_status = /var/run/userwatch/uw-server.iptables
 
 ##############################################
+# Dynamic DNS parameters
+#
+
+# Parameter: ns_server
+# Host name or IP address of the DNS server
+# Default: 127.0.0.1
+#ns_server = ns.company.com
+
+# Parameter: ns_zone_real
+# Name of the forward DNS zone to update when a host joins or
+# leaves our VPN net. The "IN A" record will be added to the zone
+# when the host registers with VPN and removed when the host leaves
+# the network. The "real" IP is used, as seen by the OpenVPN daemon.
+# If this parameter is empty or unspecified, update is not performed.
+# Default: none, optional
+#ns_zone_real = dyn.company.com.
+
+# Parameter: ns_rr_time
+# Cache time-to-live for new "A" DNS records.
+# Default: 600 seconds
+#ns_rr_time = 3600
+
+##############################################
 # LDAP parameters
 #
 
