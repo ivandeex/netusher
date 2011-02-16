@@ -352,7 +352,14 @@ sub daemonize () {
 
     my $pid_file = $uw_config{pid_file};
     if ($pid_file) {
-        fail("$pid_file: pid file already exists") if -e $pid_file;
+        if (-e $pid_file) {
+            my $pid = read_file($pid_file);
+            $pid = int($pid);
+            fail("another $progname runs with pid $pid")
+                if $pid && kill(0, $pid);
+            unlink($pid_file);
+            info("remove stale pid file $pid_file");
+        }
         create_parent_dir($pid_file);
     }
 
@@ -369,10 +376,7 @@ sub daemonize () {
     umask(022);
 
     $| = 1;
-    if (open(my $pf, "> $pid_file")) {
-        print $pf $$;
-        close $pf;
-    }
+    write_file($pid_file, $$) if $pid_file;
     $pid_written = 1;
 
     debug("daemonized");
