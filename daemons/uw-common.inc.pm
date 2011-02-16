@@ -421,7 +421,8 @@ sub rescan_etc () {
             next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):\d+:";
             $local_users{$1} = $2;
         }
-        debug("local users: " . join(",", sort keys %local_users));
+        #debug("local users: " . join(",", sort keys %local_users));
+        debug("rescan local users");
     }
 
     ($sign) = super_stat($uw_config{etc_group});
@@ -434,8 +435,14 @@ sub rescan_etc () {
             next unless m"^([\w\d\.\-_]+):\w+:(\d+):";
             $local_groups{$1} = $2;
         }
-        debug("local groups: " . join(",", sort keys %local_groups));
+        #debug("local groups: " . join(",", sort keys %local_groups));
+        debug("rescan local groups");
     }
+}
+
+sub is_local_user ($) {
+    my ($user) = @_;
+    return !$uw_config{also_local} && exists($local_users{$user});
 }
 
 ##############################################

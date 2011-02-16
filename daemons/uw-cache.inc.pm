@@ -108,26 +108,19 @@ sub get_user_groups ($) {
 #
 sub inquire_groups ($) {
     my ($users) = @_;
-    my %group_map;
 
     # remove duplicates
-    $group_map{$_->{user}} = $_->{uid}
-        for (@$users);
+    my %groups_map;
+    $groups_map{$_->{user}} = 1 for (@$users);
 
     # skip local users and users with non-matching id
-    for my $user (keys %group_map) {
+    for my $user (keys %groups_map) {
         my $grp;
-        my $our_uid = get_user_uid_grp($user, \$grp);
-        my $his_uid = $group_map{$user};
+        my $uid = get_user_uid_grp($user, \$grp);
 
-        unless (defined $our_uid) {
+        if (!$uid || is_local_user($user)) {
             debug("inquire_groups($user): skip local user");
-            delete $group_map{$user};
-            next;
-        }
-        if (defined($his_uid) && $his_uid ne '' && $his_uid != $our_uid) {
-            debug("inquire_groups($user): $his_uid not matching ldap $our_uid");
-            delete $group_map{$user};
+            delete $groups_map{$user};
             next;
         }
 
@@ -137,10 +130,10 @@ sub inquire_groups ($) {
         if ($groups_ref) {
             $groups_set{$_} = 1 for (@$groups_ref);
         }
-        $group_map{$user} = [ sort keys %groups_set ];
+        $groups_map{$user} = [ sort keys %groups_set ];
     }
 
-    return \%group_map;
+    return \%groups_map;
 }
 
 #
@@ -180,8 +173,8 @@ sub nss_get_user_groups ($) {
 #
 # user authentication caching (used by client)
 #
-sub check_auth_cache ($$$) {
-    my ($user, $uid, $pass) = @_;
+sub check_auth_cache ($$) {
+    my ($user, $pass) = @_;
 
     my $ttl = $uw_config{auth_cache_ttl};
     return -1 if !$ttl || $ttl < 0;
@@ -192,24 +185,22 @@ sub check_auth_cache ($$$) {
         return -3;
     }
 
-    return -4 if $uid != $auth_cache{$user}{uid};
-    return -5 if md5_hex($pass) ne $auth_cache{$user}{pass_md5};
+    return -4 if md5_hex($pass) ne $auth_cache{$user}{pass_md5};
 
     return 0;
 }
 
-sub update_auth_cache ($$$$) {
-    my ($user, $uid, $pass, $result) = @_;
+sub update_auth_cache ($$$) {
+    my ($user, $pass, $result) = @_;
 
     my $ttl = $uw_config{auth_cache_ttl};
     return -1 if !$ttl || $ttl < 0;
     return -2 if $result ne "OK";
 
-    $auth_cache{$user}{uid} = $uid;
     # store password as MD5 hash for security
     $auth_cache{$user}{pass_md5} = md5_hex($pass);
     $auth_cache{$user}{stamp} = monotonic_time();
-    debug("cache user auth: user:$user uid:$uid pass:ok");
+    debug("cache user auth: user:$user pass:ok");
     return 0;
 }
 

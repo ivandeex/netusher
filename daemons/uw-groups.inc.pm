@@ -46,29 +46,15 @@ sub gmirror_init () {
 #
 # parse group ids from server
 #
-sub handle_gmirror_reply ($) {
-    my ($parts_ref) = @_;
-    return unless @$parts_ref;
-
-    # parse reply header
-    my @arr = @$parts_ref;
-    my $ntokens = $arr[1];
-    if ($arr[0] ne "~" || $arr[$#arr] ne "~" || $ntokens !~ /^\d+$/) {
-        info("invalid gmirror reply");
-        return;
+sub handle_groups ($$) {
+    my ($job, $line) = @_;
+    return unless $line;
+    if ($job->{cmd} eq "update") {
+        %user_groups = ();
     }
-
-    # parse reply body
-    %user_groups = ();
-    my $k = 2;
-    for (my $i = 0; $i < $ntokens; $i++) {
-        my $user = $arr[$k++];
-        my $ngroups = $arr[$k++];
-        if ($ngroups !~ /^\d+$/ || $arr[$k + $ngroups] ne "/") {
-            info("invalid gmirror reply at token $i");
-            return;
-        }
-        $user_groups{$user} = [ @arr[$k .. ($k + $ngroups - 1)] ];
+    for my $chunk (split /\|/, $line) {
+        my ($user, @groups) = split /,/, $chunk;
+        $user_groups{$user} = \@groups;
         debug("gmirror(%s):%s", $user, join(",", @{ $user_groups{$user} }));
     }
 }
@@ -80,25 +66,20 @@ sub gmirror_apply ($) {
     my ($job) = @_;
     my (%users_set, $off_user, $off_method);
 
-    if (defined $job->{usr}) {
-        my $usr = $job->{usr};
-        if ($usr->{cmd} eq "login") {
-            $users_set{$usr->{user}} = 1;
-            debug("gmirror include user:%s", $usr->{user});
-        }
-        elsif ($usr->{cmd} eq "logout") {
-            ($off_user, $off_method) = ($usr->{user}, $usr->{method});
-            debug("gmirror exclude user:$off_user method:$off_method");
-        }
+    if (defined($job) && $job->{cmd} eq "login") {
+        $users_set{$job->{user}} = 1;
+        debug("gmirror include user:%s", $job->{user});
+    }
+    if (defined($job) && $job->{cmd} eq "logout") {
+        ($off_user, $off_method) = ($job->{user}, $job->{method});
+        debug("gmirror exclude user:$off_user method:$off_method");
     }
 
     # create list of active users
     for my $u (get_active_users()) {
-        if (defined($off_user)) {
-            if ($u->{user} eq $off_user && $u->{method} eq $off_method) {
-                undef $off_user;
-                next;
-            }
+        if ($off_user && $u->{user} eq $off_user && $u->{method} eq $off_method) {
+            undef $off_user;
+            next;
         }
         $users_set{$u->{user}} = 1;
     }
@@ -420,18 +401,17 @@ sub get_skin_name () {
 #
 sub get_active_users () {
     rescan_etc();
-    my @user_list;
+    my @list;
 
     # scan utmpx
     for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx()) {
-        next unless $ut->{ut_type} == USER_PROCESS;
         # filter out local users
-        my $user = $ut->{ut_user};
-        next if !$uw_config{also_local} && exists($local_users{$user});
+        my ($user, $id, $time) = @$ut{qw[ut_user ut_id ut_time]};
+        next if $ut->{ut_type} != USER_PROCESS;
+        next if is_local_user($user);
 
-        # detect login methos
+        # detect login method
         my $method;
-        my $id = $ut->{ut_id};
         if ($id =~ m"^s/\d+$") { $method = "net" }
         elsif ($id =~ m"^\d+$") { $method = "con" }
         elsif ($id =~ m"^:\d+(\.\d+)?$") { $method = "xdm" }
@@ -439,27 +419,11 @@ sub get_active_users () {
         elsif ($ut->{ut_addr}) { $method = "net" }
         else { $method = "unk" }
 
-        # detect user id
-        my $uid = "";
-        if (exists $local_users{$user}) {
-            $uid = $local_users{$user};
-        } else {
-            my ($xname, $xpass, $xuid) = getpwnam($user);
-            $uid = $xuid if defined $xuid;
-        }
-
-        my $u = {
-                beg_time => $ut->{ut_time},
-                method => $method,
-                user => $user,
-                uid => $uid,
-                };
-        push @user_list, $u;
-        #debug("user_list next: user:%s uid:%s method:%s beg_time:%s",
-        #        $user, $uid, $method, $u->{beg_time});
+        push @list, { user => $user, method => $method, beg_time => $time };
+        #debug("user_list next: user:$user method:$method time:$time");
     }
 
-    return @user_list;
+    return @list;
 }
 
 ##############################################

@@ -27,7 +27,6 @@ our ($ev_loop, %ev_watch, $ev_reload);
 our (%local_users);
 my  ($srv_chan, @jobs, $finished);
 my  ($reconnect_pending, $reconnect_fast);
-my  $opt_gmirror = 0;
 
 our %cache_backend = (
         );
@@ -40,83 +39,118 @@ sub handle_unix_request ($$) {
     my ($chan, $req) = (@_);
     my (@arg) = split(/\s+/, $req);
     my $cmd = $arg[0];
+    rescan_etc();
+
     if ($cmd eq "echo") {
         $req =~ s/^\s*\w+\s+//;
         return $req;
-    } elsif ($cmd eq "login") {
-        return $#arg != 3 ? "usage: login xdm|net|con|pty user pass"
-                    : user_login($arg[1], $arg[2], $arg[3], undef, $chan);
-    } elsif ($cmd eq "logout") {
-        return $#arg != 2 ? "usage: logout xdm|net|con|pty user"
-                    : user_logout($arg[1], $arg[2], $chan);
     } elsif ($cmd eq "update") {
         return $#arg != 0 ? "usage: update"
-                    : update_active_users($chan);
+                    : update_active($chan);
+    } elsif ($cmd eq "auth") {
+        return $#arg != 2 ? "usage: auth user pass"
+                    : user_auth($arg[1], $arg[2], $chan);
+    } elsif ($cmd eq "groups") {
+        return $#arg != 1 ? "usage: groups user"
+                    : user_groups($arg[1], $chan);
+    } elsif ($cmd eq "login") {
+        return $#arg != 2 ? "usage: login user xdm|net|con|pty"
+                    : user_login($arg[1], $arg[2], $chan);
+    } elsif ($cmd eq "logout") {
+        return $#arg != 2 ? "usage: logout user xdm|net|con|pty"
+                    : user_logout($arg[1], $arg[2], $chan);
     } else {
-        return "usage: login|logout|update|echo [args...]";
+        return "usage: echo|update|auth|groups|login|logout [args...]";
     }
 }
 
 #
 # handle extra fields of the reply from server
 #
-sub handle_reply ($$) {
-    my ($job, $reply) = @_;
-    if ($job->{message}) {
-        info($job->{message} . ": " . $reply);
+sub handle_reply ($$$) {
+    my ($job, $reply, $groups) = @_;
+    if ($job->{info}) {
+        info($job->{info} . ": " . $reply);
     }
-    if ($job->{usr}{cmd} eq "login") {
-        my $usr = $job->{usr};
-        update_auth_cache($usr->{user}, $usr->{uid}, $usr->{pass}, $reply);
+    if ($groups && $uw_config{enable_gmirror}) {
+        handle_groups($job, $groups);
     }
-    gmirror_apply($job) if $uw_config{enable_gmirror};
+    if ($job->{cmd} eq "auth" && $job->{user}) {
+        update_auth_cache($job->{user}, $job->{pass}, $reply);
+    }
+    if ($uw_config{enable_gmirror}) {
+        gmirror_apply($job);
+    }
 }
 
-sub update_active_users ($) {
+sub update_active ($) {
     my ($chan) = @_;
-    debug("update active users");
+    debug("update active");
     return "no connection" unless $srv_chan;
-    rescan_etc();
-    my $req = create_request("update", undef, undef,
-                                &OPT_USER_LIST | $opt_gmirror);
-    queue_job($req, $chan, undef, undef);
-    # return nothing for channel to wait for server reply
+
+    my (@users) = get_active_users();
+    my $all = join("|", map { join(",", @$_{qw[user method beg_time]}) } @users);
+    my $opts = "";
+    $opts .= "g" if $uw_config{enable_gmirror};
+    my $req = join(":", $opts, get_ips(), $all);
+    queue_job("update", $req, $chan);
+
+    # return nothing so that channel will wait for server reply
     return;
 }
 
-sub user_login ($$$$$) {
-    my ($method, $user, $pass, $uid, $chan) = @_;
-    rescan_etc();
-    if (!$uw_config{also_local} && exists($local_users{$user})) {
-        debug("$user: local user login");
-        return "OK";
+sub user_auth ($$$) {
+    my ($user, $pass, $chan) = @_;
+
+    if (is_local_user($user)) {
+        debug("$user: local user auth");
+        return "local user auth";
     }
 
-    my $usr = {
-        cmd => "login",
-        method => $method,
-        user => $user,
-        pass => $pass,
-        uid => $uid
-        };
-    my $req = create_request("login", time(), $usr, $opt_gmirror);
-    if (check_auth_cache($user, $uid, $pass) == 0) {
+    my $req = "$user:$pass";
+    if (check_auth_cache($user, $pass) == 0) {
         info("$user: user login: OK (cached)");
-        queue_job($req, undef, $usr, undef);
-        return "OK";
+        queue_job("auth", $req, undef);
+        return "success";
+    }
+    queue_job("auth", $req, $chan, info => "$user: auth",
+                user => $user, pass => $pass);
+
+    # return nothing so that channel will wait for server reply
+    return;
+}
+
+sub user_groups ($$) {
+    my ($user, $chan) = @_;
+    if (is_local_user($user)) {
+        debug("$user: local user groups");
+        return "success";
     }
 
-    queue_job($req, $chan, $usr, "$user: user login");
-    # return nothing for channel to wait for server reply
+    queue_job("groups", $user, $chan, user => $user);
+
+    # return nothing so that channel will wait for server reply
+    return;
+}
+
+sub user_login ($$$) {
+    my ($user, $method, $chan) = @_;
+    if (is_local_user($user)) {
+        debug("$user: local user login");
+        return "success";
+    }
+
+    my $req = join(":", $user, $method, time, get_ips());
+    queue_job("login", $req, $chan, info => "$user: login",
+                user => $user, method => $method);
+
+    # return nothing so that channel will wait for server reply
     return;
 }
 
 sub user_logout ($$$) {
-    my ($method, $user, $chan) = @_;
-
-    # if this user is local, don't bother the server
-    rescan_etc();
-    if (!$uw_config{also_local} && exists($local_users{$user})) {
+    my ($user, $method, $chan) = @_;
+    if (is_local_user($user)) {
         debug("$user: local user logout");
         return "local";
     }
@@ -129,66 +163,28 @@ sub user_logout ($$$) {
         }
     }
 
-    my $usr = {
-        cmd => "logout",
-        method => $method,
-        user => $user,
-        uid => ""
-        };
-    my $req = create_request("logout", undef, $usr,  0);
-    queue_job($req, $chan, $usr, "$user: user logout");
+    my $req = join(":", $user, $method, time, get_ips());
+    queue_job("logout", $req, $chan, info => "$user: logout",
+                user => $user, method => $method);
+
     # return nothing so that channel will wait for server reply
     return;
 }
 
 #
-# make the request packet
-#
-sub create_request ($$$$) {
-    my ($cmd, $time, $usr, $opts) = @_;
-
-    my $line = sprintf("%s:%s:%s:", $cmd, $opts, $time);
-
-    $usr = {} unless defined $usr;
-    $line .= sprintf("%s:%s:%s:%s", $usr->{method}, $usr->{user},
-                                    $usr->{uid}, $usr->{pass});
-
-    my @ip_list = get_ip_list();
-    $line .= ":~:" . sprintf("%03d:", $#ip_list + 1)
-            . join(':', @ip_list) . ":~:";
-
-    if (&OPT_USER_LIST & $opts) {
-        my (@user_list) = get_active_users();
-        $line .= sprintf("%03d", $#user_list + 1);
-        for my $u (@user_list) {
-            $line .= sprintf(":%09d:%3s:%s:%s:/",
-                            $u->{beg_time}, $u->{method},
-                            $u->{user}, $u->{uid});
-        }
-    } else {
-        $line .= "---";
-    }
-
-    return $line . ":~";
-}
-
-#
 # scan interfaces
 #
-sub get_ip_list () {
-    my @ip_list;
-    $SIG{PIPE} = "IGNORE";
-    my $pid = open(my $out, "$uw_config{ifconfig} 2>/dev/null |");
-    fail("$uw_config{ifconfig}: failed to run") unless $pid;
-    while (<$out>) {
+sub get_ips () {
+    my ($ips, $out);
+    run_prog($uw_config{ifconfig}, \$out);
+    for (split /\n/, $out) {
         next unless m"^\s+inet addr:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+\w";
         next if $1 eq "127.0.0.1";
-        push @ip_list, $1;
+        $ips .= $1 . ",";
     }
-    close($out);
-    my $kid = waitpid($pid, 0);
-    debug("ip_list: %s", join(',', @ip_list));
-    return @ip_list;
+    $ips =~ s/,$//;
+    debug("ip list: $ips");
+    return $ips;
 }
 
 ##############################################
@@ -196,14 +192,12 @@ sub get_ip_list () {
 #
 
 sub queue_job ($$$$) {
-    my ($req, $chan, $usr, $message) = @_;
-    push @jobs, {
-        req => $req,
-        chan => $chan,
-        usr => $usr,
-        source => $chan ? $chan->{addr} : "none",
-        message => $message
-        };
+    my ($cmd, $req, $chan, %job) = @_;
+    $job{cmd} = $cmd;
+    $job{req} = "$cmd:$req";
+    $job{chan} = $chan;
+    $job{source} = $chan ? $chan->{addr} : "none";
+    push @jobs, \%job;
     handle_next_job();
 }
 
@@ -340,16 +334,13 @@ sub _srv_read_done ($$$) {
     }
 
     debug("%s: got reply \"%s\" for %s", $chan->{addr}, $reply, $job->{source});
-    my @parts = split /:/, $reply;
-    $reply = shift @parts;
+    my ($reply, $groups) = split /:/, $reply;
 
+    rescan_etc();
     if ($job->{chan}) {
         unix_write_reply($job->{chan}, $reply);
     }
-    if (@parts && $uw_config{enable_gmirror}) {
-        handle_gmirror_reply(\@parts);
-    }
-    handle_reply($job, $reply);
+    handle_reply($job, $reply, $groups);
 
     undef $job;
     handle_next_job();
@@ -514,10 +505,8 @@ sub main_loop () {
     debug("setting up");
     ev_create_loop();
 
-    if ($uw_config{enable_gmirror}) {
-        gmirror_init();
-        $opt_gmirror = &OPT_GET_GROUPS;
-    }
+    gmirror_init()
+        if ($uw_config{enable_gmirror} = $uw_config{enable_gmirror} ? 1 : 0);
 
     if (daemonize()) {
         # clone event loop in the child
@@ -531,7 +520,7 @@ sub main_loop () {
     $reconnect_fast = 1;
     reconnect();
     $ev_watch{update} = $ev_loop->timer(0, $uw_config{update_interval},
-                                        sub { update_active_users(undef) });
+                                        sub { update_active(undef) });
 
     info("$progname started");
     $ev_loop->loop();

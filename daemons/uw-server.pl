@@ -48,155 +48,118 @@ my $min_method_weight = 4;
 #
 
 #
-# parse request string.
-#
-sub parse_request ($) {
-    my ($str) = @_;
-
-    # typical request:
-    # C:1296872500:::::~:002:192.168.203.4:10.30.4.1:~:002:1296600643:XDM:root:0:/:1296856317:XTY:root:0:/:~
-
-    my @arr = split /:/, $str;
-    #debug("arr: %s", join(',', map { "$_=$arr[$_]" } (0 .. $#arr)));
-    return "invalid delimiters"
-        if $arr[7] ne '~' || $arr[$#arr] ne "~" || $arr[$arr[8] + 9] ne "~";
-
-    # command
-    my ($cmd, $opts) = @arr[0,1];
-    my $opts = $arr[1];
-    unless ($cmd eq "login" || $cmd eq "logout" || $cmd eq "update") {
-        return "invalid command";
-    }
-
-    # logon user
-    my $usr = {
-            beg_time => $arr[2],
-            method => $arr[3],
-            user => $arr[4],
-            uid => $arr[5],
-            pass => $arr[6]
-            };
-    return "invalid begin time"
-        if $usr->{beg_time} ne "" && $usr->{beg_time} !~ /^\d+$/;
-    return "invalid uid"
-        if $usr->{uid} && $usr->{uid} !~ /^\d+$/;
-
-    # parse IP list
-    my @ips;
-    for (my $i = 9; $i < $arr[8] + 9; $i++) {
-        return "invalid ip"
-            if $arr[$i] !~ /^[1-9]\d{1,2}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-        push @ips, $arr[$i];
-    }
-
-    # create user list
-    my @users;
-    my $beg_idx = $arr[8] + 11;
-    my $num = $arr[$beg_idx - 1];
-    my $end_idx = $beg_idx + $num * 5;
-    #debug("req user list beg_idx:$beg_idx end_idx:$end_idx end:$#arr");
-    return "user list too long ($beg_idx,$num,$#arr)"
-        if $end_idx > $#arr;
-
-    for (my $i = $beg_idx; $i < $end_idx; $i += 5) {
-        my $u = {
-                beg_time => $arr[$i],
-                method => $arr[$i + 1],
-                user => $arr[$i + 2],
-                uid => $arr[$i + 3],
-                };
-        return "invalid user delimiter $i"
-            if $arr[$i + 4] ne "/";
-        return "invalid beg_time $i"
-            if $u->{beg_time} !~ /^\d+$/;
-        return "invalid method $i"
-            if length($u->{method}) != 3;
-        return "invalid uid $i"
-            if $u->{uid} && $u->{uid} !~ /^\d+/;
-        #debug("next req user:%s uid:%s method:%s beg_time:%s",
-        #        $u->{user}, $u->{uid}, $u->{method}, $u->{beg_time});
-        push @users, $u;
-    }
-
-    my $req = {
-        cmd => $cmd,
-        opts => $opts,
-        log_usr => $usr,
-        ips => \@ips,
-        users => \@users
-        };
-    return $req;
-}
-
-#
 # handle client request.
 #
-sub handle_request ($) {
-    my ($req) = @_;
-    my $cmd = $req->{cmd};
-    my $usr = $req->{log_usr};
-    my $users = $req->{users};
+sub handle_request (@) {
+    my (@arg) = @_;
+    my $cmd = $arg[0];
+    my ($msg, $vpn_ip);
 
-    # select client ip belonging to vpn
+    if ($cmd eq "update") {
+        return "3 arguments required" if $#arg != 3;
+
+        ($msg, $vpn_ip) = select_vpn_ip($arg[2]);
+        return $msg if $msg;
+
+        my (@users);
+        for my $chunk (split /\|/, $arg[3]) {
+            my ($user, $method, $time) = split /,/, $chunk;
+            push @users, { user => $user, method => $method, beg_time => $time };
+        }
+
+        $msg = update_user_mapping($cmd, $vpn_ip, \@users);
+        return $msg if $msg;
+
+        $msg = "success";
+        if ($arg[1] =~ /g/) {
+            $msg .= ":" . format_groups(\@users);
+        }
+        return $msg;
+    }
+    elsif ($cmd eq "auth") {
+        return "2 arguments required" if $#arg != 2;
+
+        $msg = verify_user($arg[1]);
+        return $msg if $msg;
+
+        return "success" if $uw_config{authorize_permit};
+
+        $msg = &{$cache_backend{user_auth}}($arg[1], $arg[2]);
+        return $msg if $msg;
+
+        return "success";
+    }
+    elsif ($cmd eq "groups") {
+        return "1 argument required" if $#arg != 1;
+
+        return "success:" . format_groups( [ { user => $arg[1] } ] );
+    }
+    elsif ($cmd eq "login") {
+        ($msg, $vpn_ip) = verify_login_arguments(@arg);
+        return $msg if $msg;
+
+        return "success";
+    }
+    elsif ($cmd eq "logout") {
+        ($msg, $vpn_ip) = verify_login_arguments(@arg);
+        return $msg if $msg;
+
+        return "success";
+    }
+    else {
+        return "unknown command";
+    }
+}
+
+sub format_groups ($) {
+    my ($users) = @_;
+    my $ug = inquire_groups($users);
+    return join("|", map { join(",", $_, @{ $ug->{$_} }) } sort keys %$ug);
+}
+
+sub verify_login_arguments (@) {
+    my (@arg) = @_;
+    my ($msg, $vpn_ip);
+    return "4 arguments required" if $#arg != 4;
+
+    $msg = verify_user($arg[1]);
+    return $msg if $msg;
+
+    return "unknown method" if !$method_weight{$arg[2]};
+    return "invalid time" if $arg[3] !~ /^\d+$/;
+
+    ($msg, $vpn_ip) = select_vpn_ip($arg[4]);
+    return $msg if $msg;
+
+    return (0, $vpn_ip);
+}
+
+sub verify_user ($) {
+    my ($user) = @_;
+    if (!defined get_user_uid_grp($user, undef)) {
+        return "user not found";
+    }
+    if (is_local_user($user)) {
+        return "user is local";
+    }
+    return 0;
+}
+
+sub select_vpn_ip ($) {
+    my ($ips) = @_;
     my $vpn_ip;
-    for my $ip (@{ $req->{ips} }) {
-        next unless $ip =~ $vpn_regex;
+    for my $ip (split /,/, $ips) {
+        return "bad ip" if $ip !~ m/^[1-9]\d{1,2}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+        next if $ip !~ $vpn_regex;
         if (defined $vpn_ip) {
             debug("duplicate vpn ip");
             next;
         }
         $vpn_ip = $ip;
     }
-    return "vpn ip not found"
-        unless defined $vpn_ip;
-    debug("client vpn ip: $vpn_ip");
-
-    if ($cmd eq "login" || $cmd eq "logout") {
-        # first, verify that user exists at all
-        my $uid = get_user_uid_grp($usr->{user}, undef);
-        return "user not found" unless defined $uid;
-
-        # verify that user id matches ldap
-        if (defined($usr->{uid}) && $usr->{uid} ne '' && $usr->{uid} != $uid) {
-            debug("%s: uid %s does not match ldap %s",
-                   $usr->{user}, $usr->{uid}, $uid);
-            return "invalid uid";
-        }
-    }
-
-    if ($cmd eq "login") {
-        # verify login time
-        return "invalid login time"
-            if $usr->{beg_time} !~ /^\d+$/;
-        # verify user password
-        unless ($uw_config{authorize_permit}) {
-            my $msg = &{$cache_backend{user_auth}}($usr->{user}, $usr->{pass});
-            return $msg if $msg;
-        }
-        # add this user to the beginning of the big list
-        unshift @$users, $usr;
-    }
-
-    if ($cmd eq "logout") {
-        # user logout
-        $users = [ $usr ];
-    }
-
-    update_user_mapping($cmd, $vpn_ip, $users);
-
-    my $reply = "OK";
-    if (&OPT_GET_GROUPS & $req->{opts}) {
-        my $group_map = inquire_groups($users);
-        $reply .= ":~:" . scalar(keys %$group_map);
-        for my $user (sort keys %$group_map) {
-            my $groups = $group_map->{$user};
-            $reply .= sprintf(":%s:%d:%s/", $user, scalar(@$groups),
-                                join("", map("$_:", @$groups)));
-        }
-        $reply .= ":~";
-    }
-
-    return $reply;
+    return "foreign ip" unless $vpn_ip;
+    #debug("client vpn ip: $vpn_ip");
+    return (0, $vpn_ip);
 }
 
 ##############################################
@@ -215,19 +178,16 @@ sub update_user_mapping ($$$) {
     # we prefer the one that has logged in earlier
     #
     my ($best);
+
     for my $u (@$users) {
-        # skip local users and users with id that does not match
-        unless ($uw_config{also_local}) {
-            my $uid = get_user_uid_grp($u->{user}, undef);
-            unless (defined $uid) {
-                debug("%s: skip local user", $u->{user});
-                next;
-            }
-            if (defined($u->{uid}) && $u->{uid} ne '' && $u->{uid} != $uid) {
-                debug("%s: uid %s does not match ldap %s",
-                        $u->{user}, $u->{uid}, $uid);
-                next;
-            }
+        my $uid = get_user_uid_grp($u->{user}, undef);
+        if (!$uid && !$uw_config{also_local}) {
+            debug("%s: user not found, skip", $u->{user});
+            next;
+        }
+        if (is_local_user($u->{user})) {
+            debug("%s: skip local user", $u->{user});
+            next;
         }
 
         if (!defined($best)) {
@@ -407,17 +367,10 @@ sub _ssl_read_done ($$$) {
         return;
     }
 
-    my $req = parse_request($pkt);
-    my $ret;
-    if (ref($req) eq 'HASH') {
-        debug("request from %s \"%s\"", $c_chan->{addr}, $pkt);
-        $ret = handle_request($req);
-    } else {
-        info("%s: invalid request (error:%s)", $c_chan->{addr}, $req);
-        $ret = "invalid request";
-    }
-
-    debug("reply to %s \"%s\"", $c_chan->{addr}, $ret);
+    debug("request \"%s\" from %s", $pkt, $c_chan->{addr});
+    rescan_etc();
+    my $ret = handle_request(split /:/, $pkt);
+    debug("reply \"%s\" to %s", $ret, $c_chan->{addr});
     ssl_write_packet($c_chan, $ret, \&_ssl_write_done, 0);
 }
 
