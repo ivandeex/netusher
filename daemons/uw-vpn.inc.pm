@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 #
 # UserWatch
-# Interface with OpenVPN and IPtables
+# Interface with OpenVPN, IPtables and DNS
 # $Id$
 #
 
@@ -63,11 +63,12 @@ sub vpn_init () {
         #
         # setup vpn ip mapping 
         #
-        my $sth = mysql_execute("SELECT vpn_ip, real_ip, UNIX_TIMESTAMP(beg_time)
+        my $sth = mysql_execute("SELECT vpn_ip, real_ip, cname,
+                                UNIX_TIMESTAMP(beg_time)
                                 FROM uw_openvpn WHERE running = 1");
         my @purge;
         while (my @row = $sth->fetchrow_array) {
-            my ($vpn_ip, $real_ip, $beg_time) = @row;
+            my ($vpn_ip, $real_ip, $cname, $beg_time) = @row;
             if (exists($vpn_session{$vpn_ip})
                     && $vpn_session{$vpn_ip}{beg_time} != $beg_time) {
                 if ($beg_time < $vpn_session{$vpn_ip}{beg_time}) {
@@ -79,6 +80,7 @@ sub vpn_init () {
             }
             $vpn_session{$vpn_ip}{real_ip} = $real_ip;
             $vpn_session{$vpn_ip}{beg_time} = $beg_time;
+            $vpn_session{$vpn_ip}{cname} = $cname;
         }
 
         # purge stale old sessions
@@ -168,6 +170,8 @@ sub vpn_scan () {
                         vpn_ip      => $vpn_ip,
                         beg_time    => $beg_time,
                         end_time    => $end_time,
+                        cname       => $msg->{common_name},
+                        real_ip     => $msg->{trusted_ip},
                         rx_bytes    => $msg->{bytes_received},
                         tx_bytes    => $msg->{bytes_sent}
                         );
@@ -257,6 +261,8 @@ sub vpn_scan () {
                     vpn_disconnected(
                         "status",
                         vpn_ip      => $vpn_ip,
+                        cname       => $vpn_session{$vpn_ip}{cname},
+                        real_ip     => $vpn_session{$vpn_ip}{real_ip},
                         beg_time    => $vpn_session{$vpn_ip}{beg_time}
                         );
                 }
@@ -269,8 +275,8 @@ sub vpn_scan () {
 
 #
 # mark vpn client as connected
-# required fields: vpn_ip, beg_time
-# optional fields: end_time, cname, real_ip, real_port, rx_bytes, tx_bytes
+# required fields: vpn_ip, beg_time, cname, real_ip
+# optional fields: end_time, real_port, rx_bytes, tx_bytes
 #
 sub vpn_connected ($%) {
     my ($msg, %arg) = @_;
@@ -311,6 +317,7 @@ sub vpn_connected ($%) {
         info("vpn $vpn_ip connected ($msg)");
         $vpn_session{$vpn_ip}{beg_time} = $beg_time;
         $vpn_session{$vpn_ip}{real_ip} = $arg{real_ip};
+        $vpn_session{$vpn_ip}{cname} = $arg{cname};
         iptables_update($vpn_ip, 0, 1);
         $modified = 1;
     }
@@ -321,8 +328,8 @@ sub vpn_connected ($%) {
 
 #
 # mark vpn client as disconnected
-# required fields: vpn_ip
-# optional fields: beg_time, end_time, rx_bytes, tx_bytes
+# required fields: vpn_ip, beg_time, real_ip, cname
+# optional fields: end_time, rx_bytes, tx_bytes
 #
 sub vpn_disconnected ($%) {
     my ($msg, %arg) = @_;
@@ -350,12 +357,11 @@ sub vpn_disconnected ($%) {
         info("vpn $vpn_ip disconnected ($msg)");
         # real ip can be shared by several vpn addresses
         # find if there are others using the same ip
-        my $real_ip = $vpn_session{$vpn_ip}{real_ip};
         my $count = -1;
         for my $ip (keys %vpn_session) {
-            $count++ if $vpn_session{$ip}{real_ip} eq $real_ip;
+            $count++ if $vpn_session{$ip}{real_ip} eq $arg{real_ip};
         }
-        debug("$count vpn sessions still use real ip $real_ip");
+        debug("$count vpn sessions still use real ip $arg{real_ip}");
         iptables_update($vpn_ip, 0, $count);
         delete $vpn_session{$vpn_ip};
         $modified = 1;
