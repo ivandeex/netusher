@@ -70,6 +70,7 @@ our %uw_config =
         gmirror_conf        => "$config_root/gmirror.conf",
         update_nscd         => 1,
         nscd_pid_file       => "/var/run/nscd/nscd.pid",
+        pam_debug           => 0,   # actually used by pam module
 
         # server parameters (mysql)
         mysql_host          => "localhost",

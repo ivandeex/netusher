@@ -548,6 +548,7 @@ sub main_loop () {
                     uid_cache_ttl group_cache_ttl
                     connect_interval update_interval auth_cache_ttl
                     enable_gmirror gmirror_conf update_nscd nscd_pid_file
+                    pam_debug
                 )]);
     require_program("ifconfig");
     log_init();

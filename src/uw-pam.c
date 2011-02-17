@@ -123,7 +123,8 @@ uw_parse_config (uw_state_t *uw, const char *config_path)
 	char line[UW_CFG_LINE_MAX];
 	char c;
 	char *p, *param, *value;
-	
+	int  intval;
+
 	file = fopen(config_path, "r");
 	if (!file)
 		return;
@@ -160,7 +161,12 @@ uw_parse_config (uw_state_t *uw, const char *config_path)
 			if (uw->socket_path)
 				free(uw->socket_path);
 			uw->socket_path = strdup(value);
-			break;
+		}
+
+		if (!strcmp(param, "pam_debug")) {
+			intval = atoi(value);
+			if (intval)
+				uw->debug = 1;
 		}
 	}
 
