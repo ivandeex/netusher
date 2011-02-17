@@ -56,6 +56,8 @@ sub handle_request (@) {
     my (@arg) = @_;
     my $cmd = $arg[0];
     my ($err, $ip, $opts, $utmp, $user, $groups);
+    
+    rescan_etc();
 
     if ($cmd eq "update") {
         return "3 arguments required" if $#arg != 3;
@@ -421,8 +423,12 @@ sub _ssl_read_done ($$$) {
         return;
     }
 
-    debug("request \"%s\" from [%s]", $pkt, $c_chan->{addr});
-    rescan_etc();
+    if ($uw_config{debug}) {
+    	my $req = $pkt;
+    	# hide password from log
+    	$req =~ s/\|[^\|]*$/\|\*\*\*/ if $req =~ /^auth\|/;
+    	debug("request \"%s\" from [%s]", $req, $c_chan->{addr});
+    }
     my $ret = handle_request(split /\|/, $pkt);
     debug("reply \"%s\" to [%s]", $ret, $c_chan->{addr});
     ssl_write_packet($c_chan, $ret, \&_ssl_write_done, 0);

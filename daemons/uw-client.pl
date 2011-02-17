@@ -263,7 +263,12 @@ sub handle_next_job () {
     }
 
     my $job = shift @jobs;
-    debug("send request \"%s\" for [%s]", $job->{req}, $job->{source});
+    if ($uw_config{debug}) {
+    	my $req = $job->{req};
+    	# hide password from log
+    	$req =~ s/\|[^\|]*$/\|\*\*\*/ if $req =~ /^auth\|/;
+    	debug("send request \"%s\" for [%s]", $req, $job->{source});
+    }
     ssl_write_packet($srv_chan, $job->{req}, \&_srv_write_done, $job);
 }
 
