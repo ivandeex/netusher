@@ -14,6 +14,23 @@
 
 @SET_MAKE@
 
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+#
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+# 02110-1301 USA
+#
+
 srcdir = @srcdir@
 top_srcdir = @top_srcdir@
 VPATH = @srcdir@
@@ -36,6 +53,7 @@ PRE_UNINSTALL = :
 POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
+noinst_PROGRAMS = pam_userwatch.so$(EXEEXT)
 subdir = src
 DIST_COMMON = $(srcdir)/Makefile.am $(srcdir)/Makefile.in \
 	$(srcdir)/config.h.in
@@ -46,18 +64,10 @@ am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 mkinstalldirs = $(install_sh) -d
 CONFIG_HEADER = config.h
 CONFIG_CLEAN_FILES =
-am__vpath_adj_setup = srcdirstrip=`echo "$(srcdir)" | sed 's|.|.|g'`;
-am__vpath_adj = case $$p in \
-    $(srcdir)/*) f=`echo "$$p" | sed "s|^$$srcdirstrip/||"`;; \
-    *) f=$$p;; \
-  esac;
-am__strip_dir = `echo $$p | sed -e 's|^.*/||'`;
-am__installdirs = "$(DESTDIR)$(pammoddir)"
-pammodLTLIBRARIES_INSTALL = $(INSTALL)
-LTLIBRARIES = $(pammod_LTLIBRARIES)
-pam_userwatch_la_LIBADD =
-am_pam_userwatch_la_OBJECTS = pam_userwatch_la-uw-pam.lo
-pam_userwatch_la_OBJECTS = $(am_pam_userwatch_la_OBJECTS)
+PROGRAMS = $(noinst_PROGRAMS)
+am_pam_userwatch_so_OBJECTS = pam_userwatch_so-uw-pam.$(OBJEXT)
+pam_userwatch_so_OBJECTS = $(am_pam_userwatch_so_OBJECTS)
+pam_userwatch_so_DEPENDENCIES =
 DEFAULT_INCLUDES = -I. -I$(srcdir) -I.
 depcomp = $(SHELL) $(top_srcdir)/autoconf/depcomp
 am__depfiles_maybe = depfiles
@@ -69,8 +79,8 @@ LTCOMPILE = $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) \
 CCLD = $(CC)
 LINK = $(LIBTOOL) --tag=CC --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
 	$(AM_LDFLAGS) $(LDFLAGS) -o $@
-SOURCES = $(pam_userwatch_la_SOURCES)
-DIST_SOURCES = $(pam_userwatch_la_SOURCES)
+SOURCES = $(pam_userwatch_so_SOURCES)
+DIST_SOURCES = $(pam_userwatch_so_SOURCES)
 ETAGS = etags
 CTAGS = ctags
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
@@ -175,18 +185,13 @@ sharedstatedir = @sharedstatedir@
 sysconfdir = @sysconfdir@
 target_alias = @target_alias@
 AUTOMAKE_OPTIONS = gnu
-EXTRA_DIST = autogen.sh
-AM_CFLAGS = -Wall
-pammoddir = @PAM_MODDIR@
-pammod_LTLIBRARIES = pam_userwatch.la
-pam_userwatch_la_SOURCES = uw-pam.c
-pam_userwatch_la_LDFLAGS = -module -avoid-version -lpam
-pam_userwatch_la_CFLAGS = $(GLIB_CFLAGS) -DG_DISABLE_DEPRECATED \
-	-D_LARGEFILE_SOURCE=1 -D_LARGE_FILES -D_FILE_OFFSET_BITS=64 \
-	-D_REENTRANT -Wall -Waggregate-return -Wmissing-declarations \
-	-Wmissing-prototypes -Wredundant-decls -Wshadow -Wstrict-prototypes \
-	-Winline -pipe @GCC_FVISIBILITY_HIDDEN@
-
+AM_CPPFLAGS = -I$(top_srcdir)
+AM_CFLAGS = -Wall -fPIC
+pam_mod_dir = @PAM_MODDIR@
+pam_userwatch_so_SOURCES = uw-pam.c
+pam_userwatch_so_LDFLAGS = -shared
+pam_userwatch_so_LDADD = -lpam
+pam_userwatch_so_CFLAGS = $(GLIB_CFLAGS) -D_REENTRANT -pipe @GCC_FVISIBILITY_HIDDEN@
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-am
 
@@ -238,35 +243,16 @@ $(srcdir)/config.h.in:  $(am__configure_deps)
 
 distclean-hdr:
 	-rm -f config.h stamp-h1
-install-pammodLTLIBRARIES: $(pammod_LTLIBRARIES)
-	@$(NORMAL_INSTALL)
-	test -z "$(pammoddir)" || $(mkdir_p) "$(DESTDIR)$(pammoddir)"
-	@list='$(pammod_LTLIBRARIES)'; for p in $$list; do \
-	  if test -f $$p; then \
-	    f=$(am__strip_dir) \
-	    echo " $(LIBTOOL) --mode=install $(pammodLTLIBRARIES_INSTALL) $(INSTALL_STRIP_FLAG) '$$p' '$(DESTDIR)$(pammoddir)/$$f'"; \
-	    $(LIBTOOL) --mode=install $(pammodLTLIBRARIES_INSTALL) $(INSTALL_STRIP_FLAG) "$$p" "$(DESTDIR)$(pammoddir)/$$f"; \
-	  else :; fi; \
-	done
 
-uninstall-pammodLTLIBRARIES:
-	@$(NORMAL_UNINSTALL)
-	@set -x; list='$(pammod_LTLIBRARIES)'; for p in $$list; do \
-	  p=$(am__strip_dir) \
-	  echo " $(LIBTOOL) --mode=uninstall rm -f '$(DESTDIR)$(pammoddir)/$$p'"; \
-	  $(LIBTOOL) --mode=uninstall rm -f "$(DESTDIR)$(pammoddir)/$$p"; \
+clean-noinstPROGRAMS:
+	@list='$(noinst_PROGRAMS)'; for p in $$list; do \
+	  f=`echo $$p|sed 's/$(EXEEXT)$$//'`; \
+	  echo " rm -f $$p $$f"; \
+	  rm -f $$p $$f ; \
 	done
-
-clean-pammodLTLIBRARIES:
-	-test -z "$(pammod_LTLIBRARIES)" || rm -f $(pammod_LTLIBRARIES)
-	@list='$(pammod_LTLIBRARIES)'; for p in $$list; do \
-	  dir="`echo $$p | sed -e 's|/[^/]*$$||'`"; \
-	  test "$$dir" != "$$p" || dir=.; \
-	  echo "rm -f \"$${dir}/so_locations\""; \
-	  rm -f "$${dir}/so_locations"; \
-	done
-pam_userwatch.la: $(pam_userwatch_la_OBJECTS) $(pam_userwatch_la_DEPENDENCIES) 
-	$(LINK) -rpath $(pammoddir) $(pam_userwatch_la_LDFLAGS) $(pam_userwatch_la_OBJECTS) $(pam_userwatch_la_LIBADD) $(LIBS)
+pam_userwatch.so$(EXEEXT): $(pam_userwatch_so_OBJECTS) $(pam_userwatch_so_DEPENDENCIES) 
+	@rm -f pam_userwatch.so$(EXEEXT)
+	$(LINK) $(pam_userwatch_so_LDFLAGS) $(pam_userwatch_so_OBJECTS) $(pam_userwatch_so_LDADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
@@ -274,7 +260,7 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pam_userwatch_la-uw-pam.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pam_userwatch_so-uw-pam.Po@am__quote@
 
 .c.o:
 @am__fastdepCC_TRUE@	if $(COMPILE) -MT $@ -MD -MP -MF "$(DEPDIR)/$*.Tpo" -c -o $@ $<; \
@@ -297,12 +283,19 @@ distclean-compile:
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(LTCOMPILE) -c -o $@ $<
 
-pam_userwatch_la-uw-pam.lo: uw-pam.c
-@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_la_CFLAGS) $(CFLAGS) -MT pam_userwatch_la-uw-pam.lo -MD -MP -MF "$(DEPDIR)/pam_userwatch_la-uw-pam.Tpo" -c -o pam_userwatch_la-uw-pam.lo `test -f 'uw-pam.c' || echo '$(srcdir)/'`uw-pam.c; \
-@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/pam_userwatch_la-uw-pam.Tpo" "$(DEPDIR)/pam_userwatch_la-uw-pam.Plo"; else rm -f "$(DEPDIR)/pam_userwatch_la-uw-pam.Tpo"; exit 1; fi
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='uw-pam.c' object='pam_userwatch_la-uw-pam.lo' libtool=yes @AMDEPBACKSLASH@
+pam_userwatch_so-uw-pam.o: uw-pam.c
+@am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_so_CFLAGS) $(CFLAGS) -MT pam_userwatch_so-uw-pam.o -MD -MP -MF "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo" -c -o pam_userwatch_so-uw-pam.o `test -f 'uw-pam.c' || echo '$(srcdir)/'`uw-pam.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo" "$(DEPDIR)/pam_userwatch_so-uw-pam.Po"; else rm -f "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='uw-pam.c' object='pam_userwatch_so-uw-pam.o' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_la_CFLAGS) $(CFLAGS) -c -o pam_userwatch_la-uw-pam.lo `test -f 'uw-pam.c' || echo '$(srcdir)/'`uw-pam.c
+@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_so_CFLAGS) $(CFLAGS) -c -o pam_userwatch_so-uw-pam.o `test -f 'uw-pam.c' || echo '$(srcdir)/'`uw-pam.c
+
+pam_userwatch_so-uw-pam.obj: uw-pam.c
+@am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_so_CFLAGS) $(CFLAGS) -MT pam_userwatch_so-uw-pam.obj -MD -MP -MF "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo" -c -o pam_userwatch_so-uw-pam.obj `if test -f 'uw-pam.c'; then $(CYGPATH_W) 'uw-pam.c'; else $(CYGPATH_W) '$(srcdir)/uw-pam.c'; fi`; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo" "$(DEPDIR)/pam_userwatch_so-uw-pam.Po"; else rm -f "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='uw-pam.c' object='pam_userwatch_so-uw-pam.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_so_CFLAGS) $(CFLAGS) -c -o pam_userwatch_so-uw-pam.obj `if test -f 'uw-pam.c'; then $(CYGPATH_W) 'uw-pam.c'; else $(CYGPATH_W) '$(srcdir)/uw-pam.c'; fi`
 
 mostlyclean-libtool:
 	-rm -f *.lo
@@ -391,11 +384,8 @@ distdir: $(DISTFILES)
 	done
 check-am: all-am
 check: check-am
-all-am: Makefile $(LTLIBRARIES) config.h
+all-am: Makefile $(PROGRAMS) config.h
 installdirs:
-	for dir in "$(DESTDIR)$(pammoddir)"; do \
-	  test -z "$$dir" || $(mkdir_p) "$$dir"; \
-	done
 install: install-am
 install-exec: install-exec-am
 install-data: install-data-am
@@ -423,8 +413,8 @@ maintainer-clean-generic:
 	-test -z "$(MAINTAINERCLEANFILES)" || rm -f $(MAINTAINERCLEANFILES)
 clean: clean-am
 
-clean-am: clean-generic clean-libtool clean-local \
-	clean-pammodLTLIBRARIES mostlyclean-am
+clean-am: clean-generic clean-libtool clean-local clean-noinstPROGRAMS \
+	mostlyclean-am
 
 distclean: distclean-am
 	-rm -rf ./$(DEPDIR)
@@ -442,9 +432,9 @@ info: info-am
 
 info-am:
 
-install-data-am: install-pammodLTLIBRARIES
+install-data-am:
 
-install-exec-am:
+install-exec-am: install-exec-local
 
 install-info: install-info-am
 
@@ -470,31 +460,31 @@ ps: ps-am
 
 ps-am:
 
-uninstall-am: uninstall-info-am uninstall-pammodLTLIBRARIES
+uninstall-am: uninstall-info-am uninstall-local
 
 .PHONY: CTAGS GTAGS all all-am check check-am clean clean-generic \
-	clean-libtool clean-local clean-pammodLTLIBRARIES ctags \
-	distclean distclean-compile distclean-generic distclean-hdr \
+	clean-libtool clean-local clean-noinstPROGRAMS ctags distclean \
+	distclean-compile distclean-generic distclean-hdr \
 	distclean-libtool distclean-tags distdir dvi dvi-am html \
 	html-am info info-am install install-am install-data \
-	install-data-am install-exec install-exec-am install-info \
-	install-info-am install-man install-pammodLTLIBRARIES \
+	install-data-am install-exec install-exec-am \
+	install-exec-local install-info install-info-am install-man \
 	install-strip installcheck installcheck-am installdirs \
 	maintainer-clean maintainer-clean-generic mostlyclean \
 	mostlyclean-compile mostlyclean-generic mostlyclean-libtool \
 	pdf pdf-am ps ps-am tags uninstall uninstall-am \
-	uninstall-info-am uninstall-pammodLTLIBRARIES
+	uninstall-info-am uninstall-local
 
 
-DISABLE-install-data-hook:
-	( 	cd $(DESTDIR)$(PAM_MODDIR) && \
-		$(LN_S) -f pam_userwatch.so pam_userwatch_auth.so && \
-		$(LN_S) -f pam_userwatch.so pam_userwatch_session.so \
-	)
+install-exec-local: install-pam_userwatch_so
 
-DISABLE-uninstall-hook:
-	rm -f $(DESTDIR)$(PAM_MODDIR)/pam_userwatch_auth.so \
-	      $(DESTDIR)$(PAM_MODDIR)/pam_userwatch_session.so
+uninstall-local: uninstall-pam_userwatch_so
+
+install-pam_userwatch_so: pam_userwatch.so
+	$(INSTALL_PROGRAM) -D pam_userwatch.so $(DESTDIR)$(pam_mod_dir)/pam_userwatch.so
+
+uninstall-pam_userwatch_so:
+	-rm -f $(DESTDIR)$(pam_mod_dir)/pam_userwatch.so
 
 clean-local:
 	-rm -f *.slo *.la *~

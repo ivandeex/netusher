@@ -1,34 +1,45 @@
-
 ## Makefile.am -- Process this file with automake to produce Makefile.in
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+#
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+# 02110-1301 USA
+#
 
 AUTOMAKE_OPTIONS = gnu
 
-EXTRA_DIST = autogen.sh
+noinst_PROGRAMS = pam_userwatch.so
 
-AM_CFLAGS = -Wall
+AM_CPPFLAGS = -I$(top_srcdir)
+AM_CFLAGS = -Wall -fPIC
 
-pammoddir = @PAM_MODDIR@
+pam_mod_dir = @PAM_MODDIR@
 
-pammod_LTLIBRARIES = pam_userwatch.la
+pam_userwatch_so_SOURCES = uw-pam.c
+pam_userwatch_so_LDFLAGS = -shared
+pam_userwatch_so_LDADD = -lpam
 
-pam_userwatch_la_SOURCES = uw-pam.c
-pam_userwatch_la_LDFLAGS = -module -avoid-version -lpam
+pam_userwatch_so_CFLAGS = $(GLIB_CFLAGS) -D_REENTRANT -pipe @GCC_FVISIBILITY_HIDDEN@
 
-pam_userwatch_la_CFLAGS = $(GLIB_CFLAGS) -DG_DISABLE_DEPRECATED \
-	-D_LARGEFILE_SOURCE=1 -D_LARGE_FILES -D_FILE_OFFSET_BITS=64 \
-	-D_REENTRANT -Wall -Waggregate-return -Wmissing-declarations \
-	-Wmissing-prototypes -Wredundant-decls -Wshadow -Wstrict-prototypes \
-	-Winline -pipe @GCC_FVISIBILITY_HIDDEN@
+install-exec-local: install-pam_userwatch_so
 
-DISABLE-install-data-hook:
-	( 	cd $(DESTDIR)$(PAM_MODDIR) && \
-		$(LN_S) -f pam_userwatch.so pam_userwatch_auth.so && \
-		$(LN_S) -f pam_userwatch.so pam_userwatch_session.so \
-	)
+uninstall-local: uninstall-pam_userwatch_so
 
-DISABLE-uninstall-hook:
-	rm -f $(DESTDIR)$(PAM_MODDIR)/pam_userwatch_auth.so \
-	      $(DESTDIR)$(PAM_MODDIR)/pam_userwatch_session.so
+install-pam_userwatch_so: pam_userwatch.so
+	$(INSTALL_PROGRAM) -D pam_userwatch.so $(DESTDIR)$(pam_mod_dir)/pam_userwatch.so
+
+uninstall-pam_userwatch_so:
+	-rm -f $(DESTDIR)$(pam_mod_dir)/pam_userwatch.so
 
 clean-local:
 	-rm -f *.slo *.la *~
