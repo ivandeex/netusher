@@ -465,8 +465,9 @@ pam_sm_open_session (pam_handle_t *pamh, int flags, int argc, const char **argv)
 	char buf[UW_SOCK_BUF_MAX];
 
 	uw_sid(uw, pamh, buf, sizeof(buf));
-	if (uw_send(uw, "login %s %s", uw->user, buf) == PAM_SUCCESS)
-		uw_receive(uw, buf, sizeof(buf));
+	if (uw_send(uw, "login %s %s", uw->user, buf) == PAM_SUCCESS) {
+		/*uw_receive(uw, buf, sizeof(buf));*/
+	}
 	memset(buf, 0, sizeof(buf));
 	uw_disconnect(uw);
 
@@ -487,8 +488,9 @@ pam_sm_close_session (pam_handle_t *pamh, int flags, int argc, const char **argv
 	char buf[UW_SOCK_BUF_MAX];
 
 	uw_sid(uw, pamh, buf, sizeof(buf));
-	if (uw_send(uw, "logout %s %s", uw->user, buf) == PAM_SUCCESS)
-		uw_receive(uw, buf, sizeof(buf));
+	if (uw_send(uw, "logout %s %s", uw->user, buf) == PAM_SUCCESS) {
+		/*uw_receive(uw, buf, sizeof(buf));*/
+	}
 	memset(buf, 0, sizeof(buf));
 	uw_disconnect(uw);
 

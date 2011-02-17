@@ -411,7 +411,7 @@ sub _ssl_read_pending ($) {
 
     my $handler = $chan->{r_handler};
     unless (defined $buf) {
-        info("%s: read failed: %s", $chan->{addr}, $!);
+        debug("%s: read failed: %s", $chan->{addr}, $!);
         end_transmission($chan);
         &$handler($chan, undef, $chan->{r_param});
         return;
@@ -419,7 +419,7 @@ sub _ssl_read_pending ($) {
 
     $bytes = length($buf);
     unless ($bytes) {
-        info("%s: read terminated: %s", $chan->{addr}, $!);
+        debug("%s: read terminated: %s", $chan->{addr}, $!);
         end_transmission($chan);
         &$handler($chan, undef, $chan->{r_param});
         return;
@@ -497,7 +497,7 @@ sub _ssl_write_pending ($) {
 
     my $handler = $chan->{w_handler};
     unless ($bytes) {
-        info("%s: write failed: %s", $chan->{addr}, $!);
+        debug("%s: write failed: %s", $chan->{addr}, $!);
         end_transmission($chan);
         &$handler($chan, 0, $chan->{w_param});
         return;

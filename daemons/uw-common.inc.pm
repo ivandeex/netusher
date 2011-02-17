@@ -222,6 +222,7 @@ sub ev_create_loop () {
     for my $sig ("INT", "TERM", "QUIT", "HUP") {
         $ev_watch{"s_$sig"}  = $ev_loop->signal($sig,  sub { ev_signaled($sig) });
     }
+    $ev_watch{"s_PIPE"}  = $ev_loop->signal("PIPE",  sub {});
 }
 
 sub ev_signaled ($) {
