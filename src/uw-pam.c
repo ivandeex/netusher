@@ -66,8 +66,6 @@ typedef struct {
 	const char *service;
 	const char *func;
 	const char *user;
-	const char *tty;
-	const char *rhost;
 } uw_state_t;
 
 
@@ -226,21 +224,6 @@ uw_prepare (const char *func, pam_handle_t *pamh,
 		uw_log(uw, UW_ERROR, "cannot get service");
 		uw->service = NULL;
 	}
-
-	ret = pam_get_item(pamh, PAM_TTY, (const void **) &uw->tty);
-	if (ret != PAM_SUCCESS) {
-		uw_log(uw, UW_ERROR, "cannot get tty");
-		uw->tty = NULL;
-	}
-
-	ret = pam_get_item(pamh, PAM_RHOST, (const void **) &uw->rhost);
-	if (ret != PAM_SUCCESS) {
-		uw_log(uw, UW_ERROR, "cannot get rhost");
-		uw->rhost = NULL;
-	}
-
-	uw_log(uw, UW_DEBUG, "service:%s user:%s rhost:%s tty:%s",
-			uw->service, uw->user, uw->rhost, uw->tty);
 
 	/* Read configuration file */
 
@@ -425,6 +408,51 @@ uw_decode_reply (const char *buf)
 	return PAM_SYSTEM_ERR;
 }
 
+
+static int
+uw_sid (uw_state_t *uw, pam_handle_t *pamh, char *buf, int buflen)
+{
+	const char *tty;
+	const char *rhost;
+	char *s;
+	int ret, len;
+
+	ret = pam_get_item(pamh, PAM_TTY, (const void **) &tty);
+	if (ret != PAM_SUCCESS || tty == NULL)
+		tty = "";
+
+	ret = pam_get_item(pamh, PAM_RHOST, (const void **) &rhost);
+	if (ret != PAM_SUCCESS || rhost == NULL)
+		rhost = "";
+
+	if (strlen(tty) + strlen(rhost) > buflen-2) {
+		*buf = '\0';
+		uw_log(uw, UW_ERROR, "sid buffer exhausted");
+		return PAM_SYSTEM_ERR;
+	}
+
+	if (*tty)
+		strcpy(buf, tty);
+	else
+		*buf = '\0';
+	if (*rhost) {
+		len = strlen(buf);
+		buf[len] = '?';
+		strcpy(buf+len+1, rhost);
+	}
+
+	for (s = buf; *s; s++) {
+		if (*s <= 32 || *s >= 127 || strchr("|!@~ \t\r\n", *s))
+			*s = '_';
+	}
+
+	if (*rhost)
+		buf[len] = '@';
+
+	return PAM_SUCCESS;
+}
+
+
 /*
 	pam_sm_open_session
 	Entrypoint from the PAM layer. Starts the wheels.
@@ -436,10 +464,9 @@ pam_sm_open_session (pam_handle_t *pamh, int flags, int argc, const char **argv)
 	uw_state_t *uw = uw_prepare("session", pamh, flags, argc, argv);
 	char buf[UW_SOCK_BUF_MAX];
 
-	uw_log(uw, UW_DEBUG, "open session");
-	uw_send(uw, "echo open_session");
-	uw_receive(uw, buf, sizeof(buf));
-	uw_log(uw, UW_DEBUG, "received \"%s\"", buf);
+	uw_sid(uw, pamh, buf, sizeof(buf));
+	if (uw_send(uw, "login %s %s", uw->user, buf) == PAM_SUCCESS)
+		uw_receive(uw, buf, sizeof(buf));
 	memset(buf, 0, sizeof(buf));
 	uw_disconnect(uw);
 
@@ -459,10 +486,10 @@ pam_sm_close_session (pam_handle_t *pamh, int flags, int argc, const char **argv
 	uw_state_t *uw = uw_prepare("session", pamh, flags, argc, argv);
 	char buf[UW_SOCK_BUF_MAX];
 
-	uw_log(uw, UW_DEBUG, "close session");
-	uw_send(uw, "echo close_session");
-	uw_receive(uw, buf, sizeof(buf));
-	uw_log(uw, UW_DEBUG, "received \"%s\"", buf);
+	uw_sid(uw, pamh, buf, sizeof(buf));
+	if (uw_send(uw, "logout %s %s", uw->user, buf) == PAM_SUCCESS)
+		uw_receive(uw, buf, sizeof(buf));
+	memset(buf, 0, sizeof(buf));
 	uw_disconnect(uw);
 
 	/* Always success */

@@ -417,15 +417,19 @@ sub get_utmp () {
     for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx()) {
         # filter out local users
         my ($user, $tty, $rhost, $btime)
-            = @$ut{qw[ut_user ut_id ut_addr ut_time]};
+            = @$ut{qw[ut_user ut_line ut_addr ut_time]};
         next if $ut->{ut_type} != USER_PROCESS;
         next if is_local_user($user);
-        $user =~ y#|!@~#_#;
-        $tty =~ y#|!@~#_#;
-        $rhost =~ y#|!@~#_#;
+        if (length($rhost) == 4) {
+        	$rhost = join(".", unpack("C4", $rhost));
+        }
+        $user =~ y# |!@~#_#;
+        $tty =~ y# |!@~#_#;
+        $rhost =~ y# |!@~#_#;
         my $sid = $rhost ? "${tty}\@${rhost}" : $tty;
         push @list, { user => $user, sid => $sid, btime => $btime };
         debug("utmp next: user:$user sid:$sid time:$btime");
+        #debug("utmp next: ".join(", ", map "$_=\"$ut->{$_}\"", sort keys %$ut));
     }
 
     return @list;
