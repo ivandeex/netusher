@@ -55,9 +55,9 @@ am__strip_dir = `echo $$p | sed -e 's|^.*/||'`;
 am__installdirs = "$(DESTDIR)$(pammoddir)"
 pammodLTLIBRARIES_INSTALL = $(INSTALL)
 LTLIBRARIES = $(pammod_LTLIBRARIES)
-pam_uwatch_la_LIBADD =
-am_pam_uwatch_la_OBJECTS = pam_uwatch_la-uw-pam.lo
-pam_uwatch_la_OBJECTS = $(am_pam_uwatch_la_OBJECTS)
+pam_userwatch_la_LIBADD =
+am_pam_userwatch_la_OBJECTS = pam_userwatch_la-uw-pam.lo
+pam_userwatch_la_OBJECTS = $(am_pam_userwatch_la_OBJECTS)
 DEFAULT_INCLUDES = -I. -I$(srcdir) -I.
 depcomp = $(SHELL) $(top_srcdir)/autoconf/depcomp
 am__depfiles_maybe = depfiles
@@ -69,8 +69,8 @@ LTCOMPILE = $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) \
 CCLD = $(CC)
 LINK = $(LIBTOOL) --tag=CC --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
 	$(AM_LDFLAGS) $(LDFLAGS) -o $@
-SOURCES = $(pam_uwatch_la_SOURCES)
-DIST_SOURCES = $(pam_uwatch_la_SOURCES)
+SOURCES = $(pam_userwatch_la_SOURCES)
+DIST_SOURCES = $(pam_userwatch_la_SOURCES)
 ETAGS = etags
 CTAGS = ctags
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
@@ -178,10 +178,10 @@ AUTOMAKE_OPTIONS = gnu
 EXTRA_DIST = autogen.sh
 AM_CFLAGS = -Wall
 pammoddir = @PAM_MODDIR@
-pammod_LTLIBRARIES = pam_uwatch.la
-pam_uwatch_la_SOURCES = uw-pam.c
-pam_uwatch_la_LDFLAGS = -module -avoid-version -lpam
-pam_uwatch_la_CFLAGS = $(GLIB_CFLAGS) -DG_DISABLE_DEPRECATED \
+pammod_LTLIBRARIES = pam_userwatch.la
+pam_userwatch_la_SOURCES = uw-pam.c
+pam_userwatch_la_LDFLAGS = -module -avoid-version -lpam
+pam_userwatch_la_CFLAGS = $(GLIB_CFLAGS) -DG_DISABLE_DEPRECATED \
 	-D_LARGEFILE_SOURCE=1 -D_LARGE_FILES -D_FILE_OFFSET_BITS=64 \
 	-D_REENTRANT -Wall -Waggregate-return -Wmissing-declarations \
 	-Wmissing-prototypes -Wredundant-decls -Wshadow -Wstrict-prototypes \
@@ -265,8 +265,8 @@ clean-pammodLTLIBRARIES:
 	  echo "rm -f \"$${dir}/so_locations\""; \
 	  rm -f "$${dir}/so_locations"; \
 	done
-pam_uwatch.la: $(pam_uwatch_la_OBJECTS) $(pam_uwatch_la_DEPENDENCIES) 
-	$(LINK) -rpath $(pammoddir) $(pam_uwatch_la_LDFLAGS) $(pam_uwatch_la_OBJECTS) $(pam_uwatch_la_LIBADD) $(LIBS)
+pam_userwatch.la: $(pam_userwatch_la_OBJECTS) $(pam_userwatch_la_DEPENDENCIES) 
+	$(LINK) -rpath $(pammoddir) $(pam_userwatch_la_LDFLAGS) $(pam_userwatch_la_OBJECTS) $(pam_userwatch_la_LIBADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
@@ -274,7 +274,7 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pam_uwatch_la-uw-pam.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pam_userwatch_la-uw-pam.Plo@am__quote@
 
 .c.o:
 @am__fastdepCC_TRUE@	if $(COMPILE) -MT $@ -MD -MP -MF "$(DEPDIR)/$*.Tpo" -c -o $@ $<; \
@@ -297,12 +297,12 @@ distclean-compile:
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(LTCOMPILE) -c -o $@ $<
 
-pam_uwatch_la-uw-pam.lo: uw-pam.c
-@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_uwatch_la_CFLAGS) $(CFLAGS) -MT pam_uwatch_la-uw-pam.lo -MD -MP -MF "$(DEPDIR)/pam_uwatch_la-uw-pam.Tpo" -c -o pam_uwatch_la-uw-pam.lo `test -f 'uw-pam.c' || echo '$(srcdir)/'`uw-pam.c; \
-@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/pam_uwatch_la-uw-pam.Tpo" "$(DEPDIR)/pam_uwatch_la-uw-pam.Plo"; else rm -f "$(DEPDIR)/pam_uwatch_la-uw-pam.Tpo"; exit 1; fi
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='uw-pam.c' object='pam_uwatch_la-uw-pam.lo' libtool=yes @AMDEPBACKSLASH@
+pam_userwatch_la-uw-pam.lo: uw-pam.c
+@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_la_CFLAGS) $(CFLAGS) -MT pam_userwatch_la-uw-pam.lo -MD -MP -MF "$(DEPDIR)/pam_userwatch_la-uw-pam.Tpo" -c -o pam_userwatch_la-uw-pam.lo `test -f 'uw-pam.c' || echo '$(srcdir)/'`uw-pam.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/pam_userwatch_la-uw-pam.Tpo" "$(DEPDIR)/pam_userwatch_la-uw-pam.Plo"; else rm -f "$(DEPDIR)/pam_userwatch_la-uw-pam.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='uw-pam.c' object='pam_userwatch_la-uw-pam.lo' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_uwatch_la_CFLAGS) $(CFLAGS) -c -o pam_uwatch_la-uw-pam.lo `test -f 'uw-pam.c' || echo '$(srcdir)/'`uw-pam.c
+@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_la_CFLAGS) $(CFLAGS) -c -o pam_userwatch_la-uw-pam.lo `test -f 'uw-pam.c' || echo '$(srcdir)/'`uw-pam.c
 
 mostlyclean-libtool:
 	-rm -f *.lo
@@ -443,8 +443,6 @@ info: info-am
 info-am:
 
 install-data-am: install-pammodLTLIBRARIES
-	@$(NORMAL_INSTALL)
-	$(MAKE) $(AM_MAKEFLAGS) install-data-hook
 
 install-exec-am:
 
@@ -473,33 +471,30 @@ ps: ps-am
 ps-am:
 
 uninstall-am: uninstall-info-am uninstall-pammodLTLIBRARIES
-	@$(NORMAL_INSTALL)
-	$(MAKE) $(AM_MAKEFLAGS) uninstall-hook
 
 .PHONY: CTAGS GTAGS all all-am check check-am clean clean-generic \
 	clean-libtool clean-local clean-pammodLTLIBRARIES ctags \
 	distclean distclean-compile distclean-generic distclean-hdr \
 	distclean-libtool distclean-tags distdir dvi dvi-am html \
 	html-am info info-am install install-am install-data \
-	install-data-am install-data-hook install-exec install-exec-am \
-	install-info install-info-am install-man \
-	install-pammodLTLIBRARIES install-strip installcheck \
-	installcheck-am installdirs maintainer-clean \
-	maintainer-clean-generic mostlyclean mostlyclean-compile \
-	mostlyclean-generic mostlyclean-libtool pdf pdf-am ps ps-am \
-	tags uninstall uninstall-am uninstall-hook uninstall-info-am \
-	uninstall-pammodLTLIBRARIES
+	install-data-am install-exec install-exec-am install-info \
+	install-info-am install-man install-pammodLTLIBRARIES \
+	install-strip installcheck installcheck-am installdirs \
+	maintainer-clean maintainer-clean-generic mostlyclean \
+	mostlyclean-compile mostlyclean-generic mostlyclean-libtool \
+	pdf pdf-am ps ps-am tags uninstall uninstall-am \
+	uninstall-info-am uninstall-pammodLTLIBRARIES
 
 
-install-data-hook:
+DISABLE-install-data-hook:
 	( 	cd $(DESTDIR)$(PAM_MODDIR) && \
-		$(LN_S) -f pam_uwatch.so pam_uwatch_auth.so && \
-		$(LN_S) -f pam_uwatch.so pam_uwatch_session.so \
+		$(LN_S) -f pam_userwatch.so pam_userwatch_auth.so && \
+		$(LN_S) -f pam_userwatch.so pam_userwatch_session.so \
 	)
 
-uninstall-hook:
-	rm -f $(DESTDIR)$(PAM_MODDIR)/pam_uwatch_auth.so \
-	      $(DESTDIR)$(PAM_MODDIR)/pam_uwatch_session.so
+DISABLE-uninstall-hook:
+	rm -f $(DESTDIR)$(PAM_MODDIR)/pam_userwatch_auth.so \
+	      $(DESTDIR)$(PAM_MODDIR)/pam_userwatch_session.so
 
 clean-local:
 	-rm -f *.slo *.la *~
