@@ -29,8 +29,12 @@
 #include <assert.h>
 #include <syslog.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
 #include <stdarg.h>
 #include <pwd.h>
+
+#include "config.h"
 
 #ifdef HAVE_VISIBILITY_HIDDEN
 #define EXPORT_SYMBOL __attribute__((visibility("default")))
@@ -38,49 +42,59 @@
 #define EXPORT_SYMBOL
 #endif
 
-#define __STRINGIFY_2(x)	#x
-#define __STRINGIFY(x)		__STRINGIFY_2(x)
 
-#define PMPREFIX "pam_uwatch(" __STRINGIFY(__LINE__) ") "
+typedef struct {
+	int			debug;
+	const char *user;
+} uw_state_t;
 
 
 static void
-l0g(const char *fmt, ...)
+uw_log(const uw_state_t *uw, int is_debug, const char *fmt, ...)
 {
+	char *format;
 	va_list ap;
+	if (is_debug && NULL != uw && !uw->debug)
+		return;
+	format = malloc(strlen(fmt) + 32);
+	strcpy(format, "pam_userwatch(): ");
+	strcat(format, fmt);
+	strcat(format, "\n");
 	va_start(ap, fmt);
-	vsyslog(LOG_AUTHPRIV | LOG_ERR, fmt, ap);
+	vsyslog(LOG_AUTHPRIV | LOG_INFO, format, ap);
 	va_end(ap);
+	free(format);
 }
 
 
 /*
-	parse_pam_args
+	Preparation:
+		- parse pam_args,
+		- get user name and pam initiator name
+		- get unix socket path
 */
-static void
-parse_pam_args(int argc, const char **argv)
+static uw_state_t *
+uw_prepare(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	int i;
+	uw_state_t *uw = NULL;
+	int i, ret;
 
-	/* first, set default values */
+	uw = malloc(sizeof(*uw));
+	memset(uw, 0, sizeof(*uw));
+	uw->debug = 1;
+
 	for (i = 0; i < argc; i++) {
-		l0g(PMPREFIX "pam_uwatch option: %s\n", argv[i] ? argv[i] : "NULL");
+		uw_log(uw, 1, "option: %s", argv[i] ? argv[i] : "NULL");
 	}
-}
 
+	ret = pam_get_user(pamh, &uw->user, NULL);
+	if (ret != PAM_SUCCESS) {
+		uw_log(uw, 0, "cannot get user");
+		uw->user = NULL;
+	}
+	uw_log(uw, 1, "user:%s", uw->user);
 
-/*
-	modify_usecount
-	Adjusts the user reference count.
-	Returns the new reference count value on success, or -1 on error.
-	Note: Modified version of pam_console.c:use_count()
-*/
-static int
-modify_usecount(const char *user, int op)
-{
-	int val = -1;
-	assert(user != NULL);
-	return val;
+	return uw;
 }
 
 
@@ -92,44 +106,50 @@ modify_usecount(const char *user, int op)
 PAM_EXTERN EXPORT_SYMBOL int
 pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	int ret = PAM_SUCCESS;
-	const char *pam_user = NULL;
-
-	/* call pam_get_user again because ssh calls PAM from seperate processes. */
-	ret = pam_get_user(pamh, &pam_user, NULL);
-	if (ret != PAM_SUCCESS) {
-		l0g(PMPREFIX "could not get user");
-		/* do NOT return PAM_SERVICE_ERR or root will not be able to su */
-		goto _return;
-	}
-
-	parse_pam_args(argc, argv);
-
-	ret = 0; // readconfig();
-	if (ret < 0) {
-		ret = PAM_SERVICE_ERR;
-		goto _return;
-	}
-
-	l0g(PMPREFIX "%s: real uid/gid=%ld:%ld, effective uid/gid=%ld:%ld\n",
-		pam_user, (long) getuid(), (long) getgid(),
-		(long) geteuid(), (long) getegid());
-	modify_usecount(pam_user, 1);
-
-_return:
-	l0g(PMPREFIX "done opening session\n");
-	return ret;
+	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
+	uw_log(uw, 1, "open session");
+	return PAM_SUCCESS;
 }
 
 
 /*
-	pam_sm_authenticat
+	pam_sm_close_session
+	Entry point from the PAM layer. Stops all wheels.
+*/
+PAM_EXTERN EXPORT_SYMBOL
+int
+pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **argv)
+{
+	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
+	uw_log(uw, 1, "close session");
+	return PAM_SUCCESS;
+}
+
+
+/*
+	pam_sm_authenticate
 	Placeholder
 */
 PAM_EXTERN EXPORT_SYMBOL
 int
 pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
+	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
+	uw_log(uw, 1, "authenticate");
+	return PAM_SUCCESS;
+}
+
+
+/*
+	pam_sm_setcred
+	Placeholder.
+*/
+PAM_EXTERN EXPORT_SYMBOL
+int
+pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv)
+{
+	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
+	uw_log(uw, 1, "setcred");
 	return PAM_SUCCESS;
 }
 
@@ -142,52 +162,8 @@ PAM_EXTERN EXPORT_SYMBOL
 int
 pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	return pam_sm_authenticate(pamh, flags, argc, argv);
-}
-
-
-/*
-	pam_sm_close_session
-	Entrypoint from the PAM layer. Stops all wheels.
-*/
-PAM_EXTERN EXPORT_SYMBOL
-int
-pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **argv)
-{
-	int ret = PAM_SUCCESS;
-	const char *pam_user = NULL;
-
-	l0g(PMPREFIX "pam_uwatch: uid = %d , euid = %d.\n", getuid(), geteuid());
-	/* call pam_get_user again because ssh calls PAM fns from separate processes. */
-	ret = pam_get_user(pamh, &pam_user, NULL);
-	if (ret != PAM_SUCCESS) {
-		l0g(PMPREFIX "could not get user\n");
-		/* DONT return PAM_SERVICE_ERR or root won't be able to su to other users */
-		goto _return;
-	}
-
-	parse_pam_args(argc, argv);
-
-	if (modify_usecount(pam_user, -1) <= 0) {
-		l0g(PMPREFIX "%s - all sessions closed\n", pam_user);
-	} else {
-		l0g(PMPREFIX "%s seems to have other remaining open sessions\n", pam_user);
-	}
-_return:
-	/* Note that config is automatically freed later in clean_config(). */
-	l0g(PMPREFIX "pam_uwatch execution complete\n");
-	return ret;
-}
-
-
-/*
-	pam_sm_setcred
-	Placeholder.
-*/
-PAM_EXTERN EXPORT_SYMBOL
-int
-pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv)
-{
+	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
+	uw_log(uw, 1, "chauthtok");
 	return PAM_SUCCESS;
 }
 
@@ -200,7 +176,9 @@ PAM_EXTERN EXPORT_SYMBOL
 int
 pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-    return PAM_IGNORE;
+	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
+	uw_log(uw, 1, "acct_mgmt");
+	return PAM_SUCCESS;
 }
 
 
