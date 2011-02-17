@@ -54,13 +54,14 @@ sub handle_unix_request ($$) {
         return $#arg != 1 ? "usage: groups user"
                     : user_groups($arg[1], $chan);
     } elsif ($cmd eq "login") {
-        return $#arg != 2 ? "usage: login user xdm|net|con|pty"
+        return $#arg != 2 ? "usage: login user sid"
                     : user_login($arg[1], $arg[2], $chan);
     } elsif ($cmd eq "logout") {
-        return $#arg != 2 ? "usage: logout user xdm|net|con|pty"
+        return $#arg != 2 ? "usage: logout user sid"
                     : user_logout($arg[1], $arg[2], $chan);
     } else {
-        return "usage: echo|update|auth|groups|login|logout [args...]";
+        return "usage: echo|update|auth|groups|login|logout [args...] ;"
+              ." SIDs: tty\@rhost xdm/N net/N con/N pty/N";
     }
 }
 
@@ -88,11 +89,9 @@ sub update_active ($) {
     debug("update active");
     return "no connection" unless $srv_chan;
 
-    my (@users) = get_active_users();
-    my $all = join("|", map { join(",", @$_{qw[user method beg_time]}) } @users);
     my $opts = "";
     $opts .= "g" if $uw_config{enable_gmirror};
-    my $req = join(":", $opts, get_ips(), $all);
+    my $req = join("|", $opts, pack_ips(), pack_utmp());
     queue_job("update", $req, $chan);
 
     # return nothing so that channel will wait for server reply
@@ -107,7 +106,7 @@ sub user_auth ($$$) {
         return "local user auth";
     }
 
-    my $req = "$user:$pass";
+    my $req = "$user|$pass";
     if (check_auth_cache($user, $pass) == 0) {
         info("$user: user login: OK (cached)");
         queue_job("auth", $req, undef);
@@ -127,45 +126,38 @@ sub user_groups ($$) {
         return "success";
     }
 
-    queue_job("groups", $user, $chan, user => $user);
+    my $req = $user;
+    queue_job("groups", $req, $chan, user => $user);
 
     # return nothing so that channel will wait for server reply
     return;
 }
 
 sub user_login ($$$) {
-    my ($user, $method, $chan) = @_;
+    my ($user, $sid, $chan) = @_;
     if (is_local_user($user)) {
         debug("$user: local user login");
         return "success";
     }
 
-    my $req = join(":", $user, $method, time, get_ips());
+    my $req = join("|", $user, $sid, time, pack_ips(), pack_utmp());
     queue_job("login", $req, $chan, info => "$user: login",
-                user => $user, method => $method);
+                user => $user, sid => $sid);
 
     # return nothing so that channel will wait for server reply
     return;
 }
 
 sub user_logout ($$$) {
-    my ($user, $method, $chan) = @_;
+    my ($user, $sid, $chan) = @_;
     if (is_local_user($user)) {
         debug("$user: local user logout");
         return "local";
     }
 
-    # maybe other such users still exist?
-    for my $u (get_active_users()) {
-        if ($u->{user} eq $user && $u->{method} eq $method) {
-            debug("$user: more users exist with method $method");
-            return "got more";
-        }
-    }
-
-    my $req = join(":", $user, $method, time, get_ips());
+    my $req = join("|", $user, $sid, time, pack_ips(), pack_utmp());
     queue_job("logout", $req, $chan, info => "$user: logout",
-                user => $user, method => $method);
+                user => $user, sid => $sid);
 
     # return nothing so that channel will wait for server reply
     return;
@@ -174,7 +166,7 @@ sub user_logout ($$$) {
 #
 # scan interfaces
 #
-sub get_ips () {
+sub pack_ips () {
     my ($ips, $out);
     run_prog($uw_config{ifconfig}, \$out);
     for (split /\n/, $out) {
@@ -187,6 +179,10 @@ sub get_ips () {
     return $ips;
 }
 
+sub pack_utmp () {
+    return join("~", map { join("!", @$_{qw[user sid btime]}) } get_utmp());
+}
+
 ##############################################
 # job queue
 #
@@ -194,7 +190,7 @@ sub get_ips () {
 sub queue_job ($$$$) {
     my ($cmd, $req, $chan, %job) = @_;
     $job{cmd} = $cmd;
-    $job{req} = "$cmd:$req";
+    $job{req} = "$cmd|$req";
     $job{chan} = $chan;
     $job{source} = $chan ? $chan->{addr} : "none";
     push @jobs, \%job;
@@ -216,7 +212,7 @@ sub handle_next_job () {
     }
 
     my $job = shift @jobs;
-    debug("sending job %s from %s", $job->{req}, $job->{source});
+    debug("send request \"%s\" for %s", $job->{req}, $job->{source});
     ssl_write_packet($srv_chan, $job->{req}, \&_srv_write_done, $job);
 }
 
@@ -314,7 +310,7 @@ sub _srv_write_done ($$$) {
     my ($chan, $success, $job) = @_;
 
     unless ($success) {
-        debug("re-queue job from %s after failed write", $job->{source});
+        debug("re-queue job from \"%s\" after failed write", $job->{source});
         unshift @jobs, $job;
         reconnect();
         return;
@@ -327,14 +323,14 @@ sub _srv_read_done ($$$) {
     my ($chan, $reply, $job) = @_;
 
     unless (defined $reply) {
-        debug("re-queue job from %s after failed read", $job->{source});
+        debug("re-queue job from \"%s\" after failed read", $job->{source});
         unshift @jobs, $job;
         reconnect();
         return;
     }
 
-    debug("%s: got reply \"%s\" for %s", $chan->{addr}, $reply, $job->{source});
-    my ($reply, $groups) = split /:/, $reply;
+    debug("got reply \"%s\" for %s", $reply, $job->{source});
+    my ($reply, $groups) = split /\|/, $reply;
 
     rescan_etc();
     if ($job->{chan}) {

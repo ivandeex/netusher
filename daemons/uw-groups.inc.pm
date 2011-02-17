@@ -47,15 +47,16 @@ sub gmirror_init () {
 # parse group ids from server
 #
 sub handle_groups ($$) {
-    my ($job, $line) = @_;
-    return unless $line;
+    my ($job, $arg) = @_;
+    return unless $arg;
     if ($job->{cmd} eq "update") {
+        # flash completely
         %user_groups = ();
     }
-    for my $chunk (split /\|/, $line) {
-        my ($user, @groups) = split /,/, $chunk;
+    for my $part (split /~/, $arg) {
+        my ($user, @groups) = split /!/, $part;
         $user_groups{$user} = \@groups;
-        debug("gmirror(%s):%s", $user, join(",", @{ $user_groups{$user} }));
+        debug("gmirror %s: %s", $user, join(",", @groups));
     }
 }
 
@@ -64,20 +65,21 @@ sub handle_groups ($$) {
 #
 sub gmirror_apply ($) {
     my ($job) = @_;
-    my (%users_set, $off_user, $off_method);
+    my (%users_set, $off_user, $off_sid);
+    my $cmd = defined($job) ? $job->{cmd} : "";
 
-    if (defined($job) && $job->{cmd} eq "login") {
+    if ($cmd eq "login" || $cmd eq "groups") {
         $users_set{$job->{user}} = 1;
         debug("gmirror include user:%s", $job->{user});
     }
-    if (defined($job) && $job->{cmd} eq "logout") {
-        ($off_user, $off_method) = ($job->{user}, $job->{method});
-        debug("gmirror exclude user:$off_user method:$off_method");
+    if ($cmd eq "logout") {
+        ($off_user, $off_sid) = @$job{qw[user sid]};
+        debug("gmirror exclude user:$off_user sid:\"$off_sid\"");
     }
 
     # create list of active users
-    for my $u (get_active_users()) {
-        if ($off_user && $u->{user} eq $off_user && $u->{method} eq $off_method) {
+    for my $u (get_utmp()) {
+        if ($off_user && $u->{user} eq $off_user && $u->{sid} eq $off_sid) {
             undef $off_user;
             next;
         }
@@ -399,28 +401,23 @@ sub get_skin_name () {
 ##############################################
 # scan /var/utmpx
 #
-sub get_active_users () {
+sub get_utmp () {
     rescan_etc();
     my @list;
 
     # scan utmpx
     for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx()) {
         # filter out local users
-        my ($user, $id, $time) = @$ut{qw[ut_user ut_id ut_time]};
+        my ($user, $tty, $rhost, $btime)
+            = @$ut{qw[ut_user ut_id ut_addr ut_time]};
         next if $ut->{ut_type} != USER_PROCESS;
         next if is_local_user($user);
-
-        # detect login method
-        my $method;
-        if ($id =~ m"^s/\d+$") { $method = "net" }
-        elsif ($id =~ m"^\d+$") { $method = "con" }
-        elsif ($id =~ m"^:\d+(\.\d+)?$") { $method = "xdm" }
-        elsif ($id =~ m"^/\d+$") { $method = "pty" }
-        elsif ($ut->{ut_addr}) { $method = "net" }
-        else { $method = "unk" }
-
-        push @list, { user => $user, method => $method, beg_time => $time };
-        #debug("user_list next: user:$user method:$method time:$time");
+        $user =~ y#|!@~#_#;
+        $tty =~ y#|!@~#_#;
+        $rhost =~ y#|!@~#_#;
+        my $sid = "${tty}\@${rhost}";
+        push @list, { user => $user, sid => $sid, btime => $btime };
+        debug("utmp next: user:$user sid:$sid time:$btime");
     }
 
     return @list;

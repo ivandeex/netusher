@@ -27,6 +27,7 @@ CREATE TABLE uw_users (
     vpn_ip      varchar(16) NOT NULL,
     running     tinyint(1),
     method      varchar(3),
+    sid         varchar(24),
     PRIMARY KEY (beg_time, username, vpn_ip),
     KEY (vpn_ip)
 );

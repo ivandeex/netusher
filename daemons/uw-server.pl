@@ -36,6 +36,7 @@ our %cache_backend = (
 #
 
 my %method_weight = (
+    'top' => 9,
     'xdm' => 5,
     'net' => 4,
     'con' => 3,
@@ -53,85 +54,90 @@ my $min_method_weight = 4;
 sub handle_request (@) {
     my (@arg) = @_;
     my $cmd = $arg[0];
-    my ($msg, $vpn_ip);
+    my ($err, $ip, $utmp, $user, $groups);
 
     if ($cmd eq "update") {
         return "3 arguments required" if $#arg != 3;
 
-        ($msg, $vpn_ip) = select_vpn_ip($arg[2]);
-        return $msg if $msg;
+        ($err, $ip) = select_ip($arg[2]);
+        return $err if $err;
 
-        my (@users);
-        for my $chunk (split /\|/, $arg[3]) {
-            my ($user, $method, $time) = split /,/, $chunk;
-            push @users, { user => $user, method => $method, beg_time => $time };
-        }
+        ($err, $utmp) = unpack_utmp($arg[3]);
+        return $err if $err;
 
-        $msg = update_user_mapping($cmd, $vpn_ip, \@users);
-        return $msg if $msg;
+        $err = update_user_mapping($cmd, $ip, $utmp, undef);
+        return $err if $err;
 
-        $msg = "success";
-        if ($arg[1] =~ /g/) {
-            $msg .= ":" . format_groups(\@users);
-        }
-        return $msg;
+        $groups = pack_groups($utmp) if $arg[1] =~ /g/;
     }
     elsif ($cmd eq "auth") {
         return "2 arguments required" if $#arg != 2;
 
-        $msg = verify_user($arg[1]);
-        return $msg if $msg;
+        $err = verify_user($arg[1]);
+        return $err if $err;
 
         return "success" if $uw_config{authorize_permit};
 
-        $msg = &{$cache_backend{user_auth}}($arg[1], $arg[2]);
-        return $msg if $msg;
-
-        return "success";
+        $err = &{$cache_backend{user_auth}}($arg[1], $arg[2]);
     }
     elsif ($cmd eq "groups") {
         return "1 argument required" if $#arg != 1;
-
-        return "success:" . format_groups( [ { user => $arg[1] } ] );
+        $groups = pack_groups( [ { user => $arg[1] } ] );
     }
     elsif ($cmd eq "login") {
-        ($msg, $vpn_ip) = verify_login_arguments(@arg);
-        return $msg if $msg;
-
-        return "success";
+        ($err, $ip, $user, $utmp) = verify_login_arguments(@arg);
+        return $err if $err;
+        $err = update_user_mapping($cmd, $ip, $utmp, $user);
     }
     elsif ($cmd eq "logout") {
-        ($msg, $vpn_ip) = verify_login_arguments(@arg);
-        return $msg if $msg;
-
-        return "success";
+        ($err, $ip, $user, $utmp) = verify_login_arguments(@arg);
+        return $err if $err;
+        $err = update_user_mapping($cmd, $ip, $utmp, $user);
     }
     else {
         return "unknown command";
     }
+    return $err if $err;
+    return $groups ? "success|$groups" : "success";
 }
 
-sub format_groups ($) {
+sub pack_groups ($) {
     my ($users) = @_;
     my $ug = inquire_groups($users);
-    return join("|", map { join(",", $_, @{ $ug->{$_} }) } sort keys %$ug);
+    return join("~", map { join("!", $_, @{ $ug->{$_} }) } sort keys %$ug);
+}
+
+sub unpack_utmp ($) {
+    my ($arg) = @_;
+    my ($err, @utmp);
+    for my $part (split /~/, $arg) {
+        my ($user, $sid, $btime, @rest) = split /!/, $part;
+        return "invalid utmp record" if @rest;
+        return "invalid utmp btime" if $btime !~ /^\d+$/;
+        push @utmp, { user => $user, sid => $sid, btime => $btime };
+    }
+    return (0, \@utmp);
 }
 
 sub verify_login_arguments (@) {
     my (@arg) = @_;
-    my ($msg, $vpn_ip);
-    return "4 arguments required" if $#arg != 4;
+    my ($err, $ip, $user, $utmp);
+    return "5 arguments required" if $#arg != 5;
 
-    $msg = verify_user($arg[1]);
-    return $msg if $msg;
+    $err = verify_user($arg[1]);
+    return $err if $err;
 
-    return "unknown method" if !$method_weight{$arg[2]};
+    return "invalid sid" if !$arg[2];
     return "invalid time" if $arg[3] !~ /^\d+$/;
 
-    ($msg, $vpn_ip) = select_vpn_ip($arg[4]);
-    return $msg if $msg;
+    ($err, $ip) = select_ip($arg[4]);
+    return $err if $err;
 
-    return (0, $vpn_ip);
+    ($err, $utmp) = unpack_utmp($arg[5]);
+    return $err if $err;
+    
+    $user = { user => $arg[1], sid => $arg[2], btime => $arg[3] };
+    return (0, $ip, $user, $utmp);
 }
 
 sub verify_user ($) {
@@ -145,7 +151,7 @@ sub verify_user ($) {
     return 0;
 }
 
-sub select_vpn_ip ($) {
+sub select_ip ($) {
     my ($ips) = @_;
     my $vpn_ip;
     for my $ip (split /,/, $ips) {
@@ -169,35 +175,53 @@ sub select_vpn_ip ($) {
 #
 # update user mapping in database
 #
-sub update_user_mapping ($$$) {
-    my ($cmd, $vpn_ip, $users) = @_;
+sub update_user_mapping ($$$$) {
+    my ($cmd, $vpn_ip, $utmp, $user) = @_;
+    my ($best, $more_user, $less_user);
+    $more_user = $user if $cmd eq "login";
+    $less_user = $user if $cmd eq "logout";
 
     #
     # currently only one "main" user per host is allowed.
     # we preferr GDM/KDM users, and if several users are active,
     # we prefer the one that has logged in earlier
     #
-    my ($best);
 
-    for my $u (@$users) {
+    for my $u ($more_user, @$utmp) {
+        next unless defined $u;
+
         my $uid = get_user_uid_grp($u->{user}, undef);
         if (!$uid && !$uw_config{also_local}) {
             debug("%s: user not found, skip", $u->{user});
             next;
         }
+
         if (is_local_user($u->{user})) {
             debug("%s: skip local user", $u->{user});
             next;
         }
 
+        if (defined($less_user)
+                && $u->{user} eq $less_user->{user}
+                && $u->{sid} eq $less_user->{sid}) {
+            debug("skip logged out user");
+            next;
+        }
+
+        $u->{method} = detect_login_method($u->{sid});
+        $u->{weight} = login_weight($u->{method});
+
+        debug("next: user:%s method:%s weight:%s btime:%s sid:\"%s\"",
+            $u->{user}, $u->{method}, $u->{weight}, $u->{btime}, $u->{sid});
+
         if (!defined($best)) {
             $best = $u;
         }
-        elsif ($best->{method} eq $u->{method}) {
-            $best = $u if $best->{beg_time} > $u->{beg_time};
+        elsif ($best->{weight} eq $u->{weight}) {
+            $best = $u if $best->{btime} > $u->{btime};
         }
         else {
-            $best = $u if login_weight($best) < login_weight($u);
+            $best = $u if $best->{weight} < $u->{weight};
         }
     }
 
@@ -207,11 +231,10 @@ sub update_user_mapping ($$$) {
         return;
     }
 
-    my $best_weight = login_weight($best);
-    debug("best: user:%s method:%s id:%s beg_time:%s weight:%s cmd:%s",
-            $best->{user}, $best->{method}, $best->{uid},
-            $best->{beg_time}, $best_weight, $cmd);
-    if ($best_weight < $min_method_weight) {
+    debug("best: user:%s method:%s sid:\"%s\" btime:%s weight:%s cmd:%s",
+            $best->{user}, $best->{method}, $best->{sid},
+            $best->{btime}, $best->{weight}, $cmd);
+    if ($best->{weight} < $min_method_weight) {
         # if weight is less then allowed, remove the user from database
         $cmd = "logout";
     }
@@ -222,17 +245,17 @@ sub update_user_mapping ($$$) {
             "UPDATE uw_users
             SET end_time = FROM_UNIXTIME(?), running = 0
             WHERE vpn_ip = ? AND running = 1 AND beg_time < FROM_UNIXTIME(?)",
-            $best->{beg_time} - 1, $vpn_ip, $best->{beg_time}
+            $best->{btime} - 1, $vpn_ip, $best->{btime}
             );
 
         # insert or update existing record
         mysql_execute(
             "INSERT INTO uw_users
-            (vpn_ip,username,beg_time,end_time,method,running)
-            VALUES (?, ?, FROM_UNIXTIME(?), NOW(), ?, 1)
+            (vpn_ip,username,beg_time,end_time,method,sid,running)
+            VALUES (?, ?, FROM_UNIXTIME(?), NOW(), ?, ?, 1)
             ON DUPLICATE KEY UPDATE
             end_time = NOW(), running = 1",
-            $vpn_ip, $best->{user}, $best->{beg_time}, $best->{method}
+            $vpn_ip, $best->{user}, $best->{btime}, $best->{method}, $best->{sid}
             );
     }
 
@@ -241,11 +264,13 @@ sub update_user_mapping ($$$) {
         mysql_execute(
             "UPDATE uw_users SET end_time = NOW(), running = 0
             WHERE username = ? AND vpn_ip = ?
+            AND ('' = ? OR sid = ?)
             AND ('' = ? OR method = ?)
             AND ('' = ? OR beg_time = FROM_UNIXTIME(?))",
             $best->{user}, $vpn_ip,
+            $best->{sid}, $best->{sid},
             $best->{method}, $best->{method},
-            $best->{beg_time}, $best->{beg_time});
+            $best->{btime}, $best->{btime});
     }
 
     mysql_commit();
@@ -261,10 +286,28 @@ sub purge_expired_users () {
 }
 
 sub login_weight ($) {
-    my ($u) = @_;
-    return 0 if !defined($u) || !defined($u->{method});
-    my $weight = $method_weight{$u->{method}};
+    my ($method) = @_;
+    my $weight = $method_weight{$method};
     return defined($weight) ? $weight : 0;
+}
+
+sub detect_login_method ($) {
+    my ($sid) = @_;
+    my ($tty, $rhost) = split /\@/, $sid;
+
+    return "net" if $tty =~ /^\/\d+$/;
+    return "con" if $tty =~ /^\d+$/;
+    return "xdm" if $tty =~ /^\:\d+(\.\d+)?$/;
+    return "pty" if $tty =~ /^\/\d+$/;
+    return "net" if $rhost;
+
+    return "net" if $tty =~ /^(rsh|ssh|net)\//;
+    return "con" if $tty =~ /^con\//;
+    return "xdm" if $tty =~ /^(gdm|kdm|xdm)\//;
+    return "pty" if $tty =~ /^(pty|pts)\//;
+    return "top" if $tty =~ /^(test|top)\//;
+
+    return "";
 }
 
 #
@@ -369,7 +412,7 @@ sub _ssl_read_done ($$$) {
 
     debug("request \"%s\" from %s", $pkt, $c_chan->{addr});
     rescan_etc();
-    my $ret = handle_request(split /:/, $pkt);
+    my $ret = handle_request(split /\|/, $pkt);
     debug("reply \"%s\" to %s", $ret, $c_chan->{addr});
     ssl_write_packet($c_chan, $ret, \&_ssl_write_done, 0);
 }
