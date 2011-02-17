@@ -224,7 +224,8 @@ sub pack_ips () {
 }
 
 sub pack_utmp () {
-    return join("~", map { join("!", @$_{qw[user sid btime]}) } get_utmp());
+    my $s = join("~", map { join("!", @$_{qw[user sid btime]}) } get_utmp());
+    return $s ? $s : "-";
 }
 
 ##############################################

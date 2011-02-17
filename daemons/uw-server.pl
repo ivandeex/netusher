@@ -122,6 +122,7 @@ sub pack_groups ($) {
 sub unpack_utmp ($) {
     my ($arg) = @_;
     my ($err, @utmp);
+    $arg = "" if $arg eq "-";
     for my $part (split /~/, $arg) {
         my ($user, $sid, $btime, @rest) = split /!/, $part;
         return "invalid utmp record" if @rest;
