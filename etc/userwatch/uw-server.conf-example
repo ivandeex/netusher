@@ -61,9 +61,9 @@
 #purge_interval = 600
 
 # Parameters: uid_cache_ttl, gid_cache_ttl
-# The daemon can internally cache results of such LDAP queries
-# (or NSS queries if LDAP is not used directly) as finding a user id
-# and user group id by user name, or enumerating members of a group.
+# The daemon can internally cache results of such LDAP queries as
+# finding a user id and user group id by user name, or enumerating
+# members of a group (or NSS queries if LDAP is not used directly).
 # The default value of 2 seconds simply avoids repetitive LDAP/NSS
 # queries during a single client request.
 # Setting this to 0 completely disables caching.
@@ -240,15 +240,20 @@ vpn_net = 192.168.0.0
 # LDAP parameters
 #
 
+# Parameter: prefer_nss
+# Normally server will connect to LDAP for user and group information
+# or to authorize users. If this parameter is non-zero, the server will
+# skip LDAP and use normal NSS instead.
+# Default: 0
+#prefer_nss = 1
+
 # Parameter: ldap_uri
 # URI of LDAP server in the form ldap[s]://hostname[:port]
 # If port is not in the URI, 389 is used for standard (ldap) and 636
 # for SSL (ldaps) connections. Please note that due to a bug in
 # the Perl SSL implementation, the daemon will fork before opening
 # ldaps connection, increasing total memory footprint.
-# If this parameter is empty or not set, the server will not connect
-# to LDAP and use normal NSS instead.
-# Default: none, optional
+# Default: none, required if prefer_nss is not set.
 ldap_uri = ldap://ldap.company.com
 
 # Parameter: ldap_start_tls
@@ -264,14 +269,14 @@ ldap_uri = ldap://ldap.company.com
 
 # Parameters: ldap_bind_dn, ldap_bind_pass
 # These parameters define DN and password for LDAP connection.
-# Default: none, required if ldap_uri is set.
+# Default: none, required if prefer_nss is not set.
 ldap_bind_dn = cn=bindn,dc=company,dc=com
 ldap_bind_pass = secret
 
 # Parameters: ldap_user_base, ldap_group_base
 # These parameters define base in the LDAP tree for searching for
 # user and group entries.
-# Default: none, required if ldap_uri is set.
+# Default: none, required if prefer_nss is not set.
 ldap_user_base = ou=users,dc=company,dc=com
 ldap_group_base = ou=groups,dc=company,dc=com
 
@@ -307,7 +312,8 @@ ldap_group_base = ou=groups,dc=company,dc=com
 # Parameter: authorize_permit
 # Normally user authorization requests are passed to LDAP.
 # If this parameter is 1, server will bypass authorization and always
-# declare success. Warning: this setting is for test only!
+# declare success.
+# Warning: this setting is for test only!
 # Default: 0
 #authorize_permit = 1
 

@@ -19,7 +19,7 @@ use Digest::MD5 qw(md5_hex);
 #
 use User::getgrouplist;
 
-our (%uw_config, %cache_backend, %local_groups);
+our (%uw_config, %nss, %local_groups);
 my  (%uid_grp_cache, %group_cache, %auth_cache);
 
 #
@@ -32,11 +32,11 @@ sub cache_flush () {
 }
 
 #
-# return uidNumber for a user (used by server)
+# return uidNumber for a user (used by server and client)
 #
 sub get_user_uid_grp ($$) {
     my ($user, $grp_ref) = @_;
-    my ($uid, $grp, $msg);
+    my ($err, $uid, $grp);
 
     # try to fetch uid from cache
     my $ttl = $uw_config{uid_cache_ttl};
@@ -44,16 +44,16 @@ sub get_user_uid_grp ($$) {
         if (monotonic_time() - $uid_grp_cache{$user}{stamp} < $ttl) {
             $uid = $uid_grp_cache{$user}{uid};
             $grp = $uid_grp_cache{$user}{grp};
-            debug("get user:$user uid:$uid grp:$grp from:cache");
+            debug("get user:$user from:cache uid:$uid grp:$grp");
             $$grp_ref = $grp if defined $grp_ref;
             return $uid;
         }
         delete $uid_grp_cache{$user};
     }
 
-    ($msg, $uid, $grp) = &{$cache_backend{get_user_uid_grp}}($user);
-    if ($msg) {
-        debug("get user:$user uid:$uid error:$msg");
+    ($err, $uid, $grp) = &{$nss{get_user_uid_grp}}($user);
+    if ($err) {
+        debug("get user:$user from:$nss{name} uid:- err:$err");
         return;
     }
 
@@ -63,33 +63,32 @@ sub get_user_uid_grp ($$) {
         $uid_grp_cache{$user}{grp} = $grp;
         $uid_grp_cache{$user}{stamp} = monotonic_time();
     }
-    debug("get user:$user uid:$uid grp:$grp from:backend");
+    debug("get user:$user from:$nss{name} uid:$uid grp:$grp");
     $$grp_ref = $grp if defined $grp_ref;
     return $uid;
 }
 
 #
-# return group list for a user (used by server)
+# return group list for a user (used by server and client)
 #
 sub get_user_groups ($) {
     my ($user) = @_;
-    my ($msg, $groups);
+    my ($err, $groups);
 
     # try to fetch uid from cache
     my $ttl = $uw_config{group_cache_ttl};
     if ($ttl > 0 && exists($group_cache{$user})) {
         if (monotonic_time() - $group_cache{$user}{stamp} < $ttl) {
             $groups = $group_cache{$user}{groups};
-            debug("get_user_groups user:%s from:cache groups:%s",
-                    $user, join(",", @$groups));
+            debug("get user:$user from:cache groups:" . join(",", @$groups));
             return ;
         }
         delete $group_cache{$user};
     }
 
-    ($msg, $groups) = &{$cache_backend{get_user_groups}}($user);
-    if ($msg) {
-        debug("get_user_groups user:$user error:$msg");
+    ($err, $groups) = &{$nss{get_user_groups}}($user);
+    if ($err) {
+        debug("get user:$user from:$nss{name} groups:- error:$err");
         return;
     }
 
@@ -98,8 +97,7 @@ sub get_user_groups ($) {
         $group_cache{$user}{groups} = $groups;
         $group_cache{$user}{stamp} = monotonic_time();
     }
-    debug("get_user_groups user:%s from:backend groups:%s",
-            $user, join(",", @$groups));
+    debug("get user:$user from:$nss{name} groups:" . join(",", @$groups));
     return $groups;
 }
 
@@ -144,14 +142,14 @@ sub inquire_groups ($) {
 sub nss_get_user_uid_grp ($) {
     my ($user) = @_;
     my ($name, $pass, $uid, $gid) = getpwnam($user);
-    my ($msg, $grp);
+    my ($err, $grp);
     if ($name) {
         $grp = getgrgid($gid);
         $grp = $gid unless $grp;
     } else {
-        $msg = "not found";
+        $err = "not found";
     }
-    return ($msg, $uid, $grp);
+    return ($err, $uid, $grp);
 }
 
 sub nss_get_user_groups ($) {

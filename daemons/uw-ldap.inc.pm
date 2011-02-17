@@ -37,14 +37,10 @@ sub ldap_init ($) {
 
     ldap_close();
 
-    if ($uw_config{ldap_uri}) {
-        for (qw[ldap_bind_dn ldap_bind_pass ldap_user_base ldap_group_base]) {
-            next if defined $uw_config{$_};
-            fail("$config_file: missing ldap parameter \"$_\"");
-        }
-    } else {
-        # ldap is not used
-        return undef;
+    for (qw[ldap_uri ldap_bind_dn ldap_bind_pass
+            ldap_user_base ldap_group_base]) {
+        next if defined $uw_config{$_};
+        fail("$config_file: missing ldap parameter \"$_\"");
     }
 
     #
@@ -96,8 +92,8 @@ sub ldap_auth ($$) {
         return _ldap_wait_reply("AUTH $user $pass");
     }
     # child or main process
-    my ($msg, $conn) = _ldap_connect(undef, $user, $pass, 1);
-    return $msg;
+    my ($err, $conn) = _ldap_connect(undef, $user, $pass, 1);
+    return $err;
 }
 
 #
@@ -105,10 +101,10 @@ sub ldap_auth ($$) {
 #
 sub ldap_get_user_uid_grp ($) {
     my ($user) = @_;
-    my ($msg, $uid, $grp);
+    my ($err, $uid, $grp);
     if ($ldap_parent) {
         my $reply = _ldap_wait_reply("UID_GRP $user");
-        ($msg, $uid, $grp) = split /\|/, $reply;
+        ($err, $uid, $grp) = split /\|/, $reply;
     } else {
         my ($attr_user, $attr_uid, $attr_gid, $attr_group)
              = @uw_config{qw(ldap_attr_user ldap_attr_uid
@@ -116,7 +112,7 @@ sub ldap_get_user_uid_grp ($) {
         my (@res) = _ldap_search("($attr_user=$user)",
                                 [ $attr_uid, $attr_gid ],
                                 $uw_config{ldap_user_base});
-        $msg = $res[0];
+        $err = $res[0];
         $uid = $res[1]->{$attr_uid};
         my $gid = $res[1]->{$attr_gid};
         if ($gid) {
@@ -128,7 +124,7 @@ sub ldap_get_user_uid_grp ($) {
     }
     undef $uid if $uid eq "";
     undef $grp if $grp eq "";
-    return ($msg, $uid, $grp);
+    return ($err, $uid, $grp);
 }
 
 #
@@ -136,20 +132,20 @@ sub ldap_get_user_uid_grp ($) {
 #
 sub ldap_get_user_groups ($) {
     my ($user) = @_;
-    my ($msg, @groups);
+    my ($err, @groups);
 
     if ($ldap_parent) {
         my $reply = _ldap_wait_reply("GROUPS $user");
-        ($msg, @groups) = split /\|/, $reply;
+        ($err, @groups) = split /\|/, $reply;
     } else {
         my ($attr_group, $attr_member)
                 = @uw_config{qw(ldap_attr_group ldap_attr_member)};
         my (@res) = _ldap_search("($attr_member=$user)", [ $attr_group ],
                                 $uw_config{ldap_group_base});
-        $msg = shift @res;
+        $err = shift @res;
         push @groups, $_->{$attr_group} for (@res);
     }
-    return ($msg, \@groups);
+    return ($err, \@groups);
 }
 
 #
@@ -171,14 +167,14 @@ sub _ldap_child_loop () {
             $reply = "OK";
         }
         elsif ($op eq "UID_GRP") {
-            my ($msg, $uid, $grp) = ldap_get_user_uid_grp($cmd[1]);
-            $msg =~ s/\|/,/g;
-            $reply = "$msg|$uid|$grp";
+            my ($err, $uid, $grp) = ldap_get_user_uid_grp($cmd[1]);
+            $err =~ s/\|/,/g;
+            $reply = "$err|$uid|$grp";
         } elsif ($op eq "GROUPS") {
-            my ($msg, $groups) = ldap_get_user_groups($cmd[1]);
-            $msg =~ s/\|/,/g;
+            my ($err, $groups) = ldap_get_user_groups($cmd[1]);
+            $err =~ s/\|/,/g;
             $groups = [] unless $groups;
-            $reply = join("|", $msg, @$groups);
+            $reply = join("|", $err, @$groups);
         }
         elsif ($op eq "AUTH") {
             $reply = ldap_auth($cmd[1], $cmd[2]);
@@ -315,18 +311,18 @@ sub _ldap_init ($) {
     my ($first_init) = @_;
     cache_flush();
 
-    my ($msg, $conn) = _ldap_connect($uw_config{ldap_bind_dn},
+    my ($err, $conn) = _ldap_connect($uw_config{ldap_bind_dn},
                                     undef, $uw_config{ldap_bind_pass},
                                     0);
-    if ($first_init && $msg) {
-        info("warning: ldap init failed: $msg");
+    if ($first_init && $err) {
+        info("warning: ldap init failed: $err");
     }
 
-    unless ($msg) {
+    unless ($err) {
         $ldap_conn = $conn;
-        $msg = 0;
+        $err = 0;
     }
-    return $msg;
+    return $err;
 }
 
 #

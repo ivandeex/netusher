@@ -23,7 +23,8 @@ our ($ev_loop, %ev_watch, $ev_reload);
 our ($ldap_child);
 our ($vpn_regex);
 
-our %cache_backend = (
+our %nss = (
+            name => "nss",
             get_user_uid_grp    => \&nss_get_user_uid_grp,
             get_user_groups     => \&nss_get_user_groups,
             user_auth           => sub { "not implemented" }
@@ -78,11 +79,11 @@ sub handle_request (@) {
 
         return "success" if $uw_config{authorize_permit};
 
-        $err = &{$cache_backend{user_auth}}($arg[1], $arg[2]);
+        $err = &{$nss{user_auth}}($arg[1], $arg[2]);
     }
     elsif ($cmd eq "groups") {
         return "1 argument required" if $#arg != 1;
-        $groups = pack_groups( [ { user => $arg[1] } ] );
+        $groups = pack_groups( [{ user => $arg[1] }] );
     }
     elsif ($cmd eq "login") {
         ($err, $ip, $user, $utmp) = verify_login_arguments(@arg);
@@ -98,7 +99,7 @@ sub handle_request (@) {
         return "unknown command";
     }
     return $err if $err;
-    return $groups ? "success|$groups" : "success";
+    return defined($groups) ? "success|$groups" : "success";
 }
 
 sub pack_groups ($) {
@@ -142,12 +143,8 @@ sub verify_login_arguments (@) {
 
 sub verify_user ($) {
     my ($user) = @_;
-    if (!defined get_user_uid_grp($user, undef)) {
-        return "user not found";
-    }
-    if (is_local_user($user)) {
-        return "user is local";
-    }
+    return "user not found" unless defined get_user_uid_grp($user, undef);
+    return "user is local" if is_local_user($user);
     return 0;
 }
 
@@ -225,7 +222,7 @@ sub update_user_mapping ($$$$) {
         }
     }
 
-    unless (defined $best) {
+    if (!defined($best)) {
         debug("ldap users not found");
         iptables_update($vpn_ip, 1, users_from_ip($vpn_ip));
         return;
@@ -338,15 +335,16 @@ sub main_loop () {
                 # optional parameters
                 [ qw(
                     port ca_cert peer_pem idle_timeout rw_timeout
-                    also_local syslog stdout debug stacktrace daemonize
+                    syslog stdout debug stacktrace daemonize
+                    also_local prefer_nss authorize_permit
+                    mysql_port
+                    uid_cache_ttl group_cache_ttl
+                    user_retention purge_interval
                     ldap_uri ldap_bind_dn ldap_bind_pass
                     ldap_user_base ldap_group_base
                     ldap_attr_user ldap_attr_uid ldap_attr_gid
                     ldap_attr_group ldap_attr_member
                     ldap_start_tls ldap_timeout ldap_force_fork
-                    uid_cache_ttl group_cache_ttl
-                    user_retention purge_interval
-                    mysql_port authorize_permit
                     iptables_user_vpn iptables_user_real
                     iptables_host_real iptables_status
                     vpn_scan_interval vpn_scan_pause
@@ -357,9 +355,11 @@ sub main_loop () {
     log_init();
 
     debug("setting up");
-    if (defined ldap_init(1)) {
+    if (!$uw_config{prefer_nss}) {
         # switch from NSS to LDAP
-        %cache_backend = (
+        ldap_init(1);
+        %nss = (
+            name => "ldap",
             get_user_uid_grp    => \&ldap_get_user_uid_grp,
             get_user_groups     => \&ldap_get_user_groups,
             user_auth           => \&ldap_auth
@@ -378,7 +378,7 @@ sub main_loop () {
     }
 
     debug("post-fork setup");
-    ldap_init(0);
+    ldap_init(0) unless $uw_config{prefer_nss};
     ssl_startup();
     ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
 
@@ -397,23 +397,23 @@ sub ssl_accept_pending ($) {
     my $c_chan = ssl_accept($s_chan, \&ev_close);
     return unless $c_chan;
     ev_add_chan($c_chan);
-    debug("%s: client accepted", $c_chan->{addr});
+    debug("[%s] connection accepted", $c_chan->{addr});
     ssl_read_packet($c_chan, \&_ssl_read_done, 0);
 }
 
 sub _ssl_read_done ($$$) {
     my ($c_chan, $pkt, $param) = @_;
 
-    unless (defined $pkt) {
-        debug("%s: disconnected during read", $c_chan->{addr});
+    if (!defined($pkt)) {
+        debug("[%s] disconnected during read", $c_chan->{addr});
         ev_close($c_chan);
         return;
     }
 
-    debug("request \"%s\" from %s", $pkt, $c_chan->{addr});
+    debug("request \"%s\" from [%s]", $pkt, $c_chan->{addr});
     rescan_etc();
     my $ret = handle_request(split /\|/, $pkt);
-    debug("reply \"%s\" to %s", $ret, $c_chan->{addr});
+    debug("reply \"%s\" to [%s]", $ret, $c_chan->{addr});
     ssl_write_packet($c_chan, $ret, \&_ssl_write_done, 0);
 }
 
@@ -424,7 +424,7 @@ sub _ssl_write_done ($$$) {
         #debug("%s: reply completed", $c_chan->{addr});
         ssl_read_packet($c_chan, \&_ssl_read_done, $c_chan);
     } else {
-        debug("%s: disconnected during write", $c_chan->{addr});
+        debug("[%s] disconnected during write", $c_chan->{addr});
         ev_close($c_chan);
     }
 }
@@ -435,7 +435,7 @@ sub cleanup () {
     ssl_destroy_context();
     ldap_close();
     vpn_close();
-    unless ($ldap_child) {
+    if (!$ldap_child) {
         ev_remove_handlers();
         # disconnecting from mysql in a child process screws up parent
         mysql_close();

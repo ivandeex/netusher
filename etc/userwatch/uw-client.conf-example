@@ -61,12 +61,6 @@ server = uwserver.company.com
 # Operation parameters
 #
 
-# Parameter: pid_file
-# Defines file where server daemon will record process id after
-# going background. You are not supposed to change this parameter.
-# Default: see below
-#pid_file = /var/run/userwatch/uw-client.pid
-
 # Parameter: update_interval
 # This parameter defines how frequently client should send updated
 # lists of currently logged in users to the server.
@@ -75,14 +69,49 @@ server = uwserver.company.com
 # Default: 120 seconds
 #update_interval = 240
 
+# Parameter: prefer_nss
+# Normally client will connect to UW-server for user and group information
+# or to authorize users. If this parameter is non-zero, the client will
+# use normal NSS instead.
+# Default: 0
+#prefer_nss = 1
+
 # Parameters: auth_cache_ttl
 # Client daemon can remember successful user authentications
-# for given number of seconds in order to speed up successive
-# authentications and reduce network roundtrips.
+# for a given number of seconds in order to speed up successive
+# authorization and reduce network clutter.
 # Please note that user password is kept only in memory and
 # only in encrypted form.
 # Default: 0 (disabled)
 #auth_cache_ttl = 60
+
+# Parameters: uid_cache_ttl, gid_cache_ttl
+# The daemon can internally cache results of such information queries as
+# finding a user id and user group id by user name, or enumerating members
+# of a group. The default value of 2 seconds simply avoids repetitive
+# server (NSS) queries during a single client request.
+# Setting this to 0 completely disables caching.
+# Default: 2 seconds
+#uid_cache_ttl = 300
+#group_cache_ttl = 300
+
+# Parameter: authorize_permit
+# Normally user authorization requests are passed to server.
+# If this parameter is 1, client will bypass server authorization
+# and always declare success.
+# Warning: this setting is for test only!
+# Default: 0
+#authorize_permit = 1
+
+# Parameter: pid_file
+# Defines file where server daemon will record process id after
+# going background. You are not supposed to change this parameter.
+# Default: see below
+#pid_file = /var/run/userwatch/uw-client.pid
+
+##############################################
+# Group mirroring parameters
+#
 
 # Parameter: enable_gmirror
 # The client daemon can be used to dynamically add users to or remove

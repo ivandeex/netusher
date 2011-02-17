@@ -8,6 +8,7 @@
 use strict;
 use FindBin qw($Bin);
 require "$Bin/uw-common.inc.pm";
+require "$Bin/uw-cache.inc.pm";
 
 #
 # require: perl-User-Utmp
@@ -91,11 +92,18 @@ sub gmirror_apply ($) {
 
     # apply rules
     for my $user (keys %users_set) {
-        my %lgroups;
-        next unless defined $user_groups{$user};
-        for my $group (@{ $user_groups{$user} }) {
-            next unless defined $group_to_lg{$group};
-            for my $lgroup (keys %{ $group_to_lg{$group} }) {
+        my (%lgroups, $ugroups);
+        if ($uw_config{prefer_nss}) {
+            my $gmap = inquire_groups( [{ user => $user }] );
+            $ugroups = $gmap->{$user};
+        } else {
+            $ugroups = $user_groups{$user};
+        }
+        next unless defined $ugroups;
+        for my $group (@$ugroups) {
+            my $lg_set = $group_to_lg{$group};
+            next unless defined $lg_set;
+            for my $lgroup (keys %$lg_set) {
                 $lg_members{$lgroup}{$user} = 1;
             }
         }
@@ -415,7 +423,7 @@ sub get_utmp () {
         $user =~ y#|!@~#_#;
         $tty =~ y#|!@~#_#;
         $rhost =~ y#|!@~#_#;
-        my $sid = "${tty}\@${rhost}";
+        my $sid = $rhost ? "${tty}\@${rhost}" : $tty;
         push @list, { user => $user, sid => $sid, btime => $btime };
         debug("utmp next: user:$user sid:$sid time:$btime");
     }

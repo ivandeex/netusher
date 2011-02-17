@@ -28,11 +28,15 @@ our (%local_users);
 my  ($srv_chan, @jobs, $finished);
 my  ($reconnect_pending, $reconnect_fast);
 
-our %cache_backend = (
+our %nss = (
+            name => "nss",
+            get_user_uid_grp    => \&nss_get_user_uid_grp,
+            get_user_groups     => \&nss_get_user_groups,
         );
 
+
 ##############################################
-# typical operations
+# command handling
 #
 
 sub handle_unix_request ($$) {
@@ -65,24 +69,33 @@ sub handle_unix_request ($$) {
     }
 }
 
-#
-# handle extra fields of the reply from server
-#
-sub handle_reply ($$$) {
+sub handle_server_reply ($$$) {
     my ($job, $reply, $groups) = @_;
+    my $cmd = $job->{cmd};
+    rescan_etc();
+
+    if ($job->{chan}) {
+        unix_write_reply($job->{chan}, $reply);
+    }
     if ($job->{info}) {
         info($job->{info} . ": " . $reply);
     }
-    if ($groups && $uw_config{enable_gmirror}) {
-        handle_groups($job, $groups);
+    if ($groups && $uw_config{enable_gmirror} && !$uw_config{prefer_nss}) {
+        if ($groups) {
+            handle_groups($job, $groups);
+        }
+        if ($cmd eq "groups") {
+            gmirror_apply($job);
+        }
     }
-    if ($job->{cmd} eq "auth" && $job->{user}) {
+    if ($cmd eq "auth" && $job->{user}) {
         update_auth_cache($job->{user}, $job->{pass}, $reply);
     }
-    if ($uw_config{enable_gmirror}) {
-        gmirror_apply($job);
-    }
 }
+
+##############################################
+# typical operations
+#
 
 sub update_active ($) {
     my ($chan) = @_;
@@ -90,9 +103,15 @@ sub update_active ($) {
     return "no connection" unless $srv_chan;
 
     my $opts = "";
-    $opts .= "g" if $uw_config{enable_gmirror};
+    if ($uw_config{enable_gmirror} && !$uw_config{prefer_nss}) {
+        $opts .= "g";
+    }
     my $req = join("|", $opts, pack_ips(), pack_utmp());
     queue_job("update", $req, $chan);
+
+    if ($uw_config{enable_gmirror} && $uw_config{prefer_nss}) {
+        gmirror_apply(undef);
+    }
 
     # return nothing so that channel will wait for server reply
     return;
@@ -100,6 +119,14 @@ sub update_active ($) {
 
 sub user_auth ($$$) {
     my ($user, $pass, $chan) = @_;
+
+    if ($uw_config{authorize_permit}) {
+        return "success";
+    }
+
+    if ($uw_config{prefer_nss}) {
+        return "not implemented";
+    }
 
     if (is_local_user($user)) {
         debug("$user: local user auth");
@@ -121,6 +148,14 @@ sub user_auth ($$$) {
 
 sub user_groups ($$) {
     my ($user, $chan) = @_;
+
+    if ($uw_config{prefer_nss}) {
+        if ($uw_config{enable_gmirror}) {
+            gmirror_apply(make_job("groups", undef, undef, user => $user));
+        }
+        return "success";
+    }
+
     if (is_local_user($user)) {
         debug("$user: local user groups");
         return "success";
@@ -156,8 +191,9 @@ sub user_logout ($$$) {
     }
 
     my $req = join("|", $user, $sid, time, pack_ips(), pack_utmp());
-    queue_job("logout", $req, $chan, info => "$user: logout",
-                user => $user, sid => $sid);
+    my $job = queue_job("logout", $req, $chan, info => "$user: logout",
+                        user => $user, sid => $sid);
+    gmirror_apply($job);
 
     # return nothing so that channel will wait for server reply
     return;
@@ -187,14 +223,21 @@ sub pack_utmp () {
 # job queue
 #
 
-sub queue_job ($$$$) {
+sub make_job ($$$%) {
     my ($cmd, $req, $chan, %job) = @_;
     $job{cmd} = $cmd;
     $job{req} = "$cmd|$req";
     $job{chan} = $chan;
     $job{source} = $chan ? $chan->{addr} : "none";
-    push @jobs, \%job;
+    return \%job;
+}
+
+sub queue_job ($$$%) {
+    my ($cmd, $req, $chan, %params) = @_;
+    my $job = make_job($cmd, $req, $chan, %params);
+    push @jobs, $job;
     handle_next_job();
+    return $job;
 }
 
 sub handle_next_job () {
@@ -212,7 +255,7 @@ sub handle_next_job () {
     }
 
     my $job = shift @jobs;
-    debug("send request \"%s\" for %s", $job->{req}, $job->{source});
+    debug("send request \"%s\" for [%s]", $job->{req}, $job->{source});
     ssl_write_packet($srv_chan, $job->{req}, \&_srv_write_done, $job);
 }
 
@@ -329,14 +372,10 @@ sub _srv_read_done ($$$) {
         return;
     }
 
-    debug("got reply \"%s\" for %s", $reply, $job->{source});
+    debug("got reply \"%s\" for [%s]", $reply, $job->{source});
     my ($reply, $groups) = split /\|/, $reply;
 
-    rescan_etc();
-    if ($job->{chan}) {
-        unix_write_reply($job->{chan}, $reply);
-    }
-    handle_reply($job, $reply, $groups);
+    handle_server_reply($job, $reply, $groups);
 
     undef $job;
     handle_next_job();
@@ -440,7 +479,7 @@ sub unix_write_reply ($$) {
     $chan->{w_buf} = $reply . "\n";
     init_transmission($chan, &EV::WRITE, \&_unix_write_pending);
     fire_transmission($chan);
-    debug("sending to %s: \"%s\"", $chan->{addr}, $reply);
+    debug("sending \"%s\" to [%s]", $reply, $chan->{addr});
 }
 
 sub _unix_write_pending ($) {
@@ -491,7 +530,9 @@ sub main_loop () {
                 # optional parameters
                 [ qw(
                     port ca_cert peer_pem idle_timeout rw_timeout
-                    also_local syslog stdout debug stacktrace daemonize
+                    syslog stdout debug stacktrace daemonize
+                    also_local prefer_nss authorize_permit
+                    uid_cache_ttl group_cache_ttl
                     connect_interval update_interval auth_cache_ttl
                     enable_gmirror gmirror_conf update_nscd nscd_pid_file
                 )]);

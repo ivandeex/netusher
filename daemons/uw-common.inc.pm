@@ -54,10 +54,14 @@ our %uw_config =
         stdout              => 0,
         idle_timeout        => 240,
         rw_timeout          => 10,
+        also_local          => 0,
+        prefer_nss          => 0,
+        authorize_permit    => 0,
+        uid_cache_ttl       => 2,
+        group_cache_ttl     => 2,
 
         # client parameters
         server              => undef,
-        also_local          => 0,
         update_interval     => 120,
         connect_interval    => 5,
         unix_socket         => "$status_root/$progname.sock",
@@ -100,11 +104,8 @@ our %uw_config =
         ldap_force_fork     => 0,
 
         # server parameters (operation)
-        uid_cache_ttl       => 2,
-        group_cache_ttl     => 2,
         user_retention      => 300,
         purge_interval      => 300,
-        authorize_permit    => 0,
 
         # server parameters (iptables)
         iptables_user_vpn   => "",
