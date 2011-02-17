@@ -403,6 +403,22 @@ uw_receive (uw_state_t *uw, char *buf, int buflen)
 	return PAM_SUCCESS;
 }
 
+static int
+uw_decode_reply (const char *buf)
+{
+	if (!strcmp(buf, "success"))
+		return PAM_SUCCESS;
+	if (!strcmp(buf, "user not found"))
+		return PAM_USER_UNKNOWN;
+	if (!strcmp(buf, "not implemented"))
+		return PAM_CRED_INSUFFICIENT;
+	if (!strcmp(buf, "local user auth"))
+		return PAM_CRED_INSUFFICIENT;
+	if (!strcmp(buf, "invalid password"))
+		return PAM_AUTH_ERR;
+	return PAM_SYSTEM_ERR;
+}
+
 /*
 	pam_sm_open_session
 	Entrypoint from the PAM layer. Starts the wheels.
@@ -421,6 +437,7 @@ pam_sm_open_session (pam_handle_t *pamh, int flags, int argc, const char **argv)
 	memset(buf, 0, sizeof(buf));
 	uw_disconnect(uw);
 
+	/* Always success */
 	return PAM_SUCCESS;
 }
 
@@ -442,6 +459,7 @@ pam_sm_close_session (pam_handle_t *pamh, int flags, int argc, const char **argv
 	uw_log(uw, UW_DEBUG, "received \"%s\"", buf);
 	uw_disconnect(uw);
 
+	/* Always success */
 	return PAM_SUCCESS;
 }
 
@@ -455,8 +473,39 @@ int
 pam_sm_authenticate (pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
 	uw_state_t *uw = uw_prepare("auth", pamh, flags, argc, argv);
-	uw_log(uw, 1, "authenticate");
-	return PAM_SUCCESS;
+	const char *pass;
+	char buf[UW_SOCK_BUF_MAX];
+	int ret;
+
+	uw_log(uw, UW_DEBUG, "authenticate user \"%s\"", uw->user);
+
+	if (uw->user == NULL || *(uw->user) == '\0') {
+		uw_log(uw, UW_DEBUG, "no user");
+		return PAM_AUTH_ERR;
+	}
+
+	ret = pam_get_item(pamh, PAM_AUTHTOK, (const void **) &pass);
+	if (ret != PAM_SUCCESS || pass == NULL || *pass == '\0') {
+		uw_log(uw, UW_DEBUG, "no password (%d)", ret);
+		return PAM_AUTH_ERR;
+	}
+
+	ret = uw_send(uw, "auth %s %s", uw->user, pass);
+	if (ret == PAM_SUCCESS) {
+		ret = uw_receive(uw, buf, sizeof(buf));
+		if (ret == PAM_SUCCESS) {
+			ret = uw_decode_reply(buf);
+			uw_log(uw, UW_DEBUG,
+					"got auth for user \"%s\" reply:\"%s\" (%d)",
+					uw->user, buf, ret);
+		}
+	}
+	memset(buf, 0, sizeof(buf));
+	uw_disconnect(uw);
+	if (ret)
+		uw_log(uw, UW_DEBUG, "auth error %d", ret);
+
+	return ret;
 }
 
 
