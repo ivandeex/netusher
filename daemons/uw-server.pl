@@ -55,10 +55,12 @@ my $min_method_weight = 4;
 sub handle_request (@) {
     my (@arg) = @_;
     my $cmd = $arg[0];
-    my ($err, $ip, $utmp, $user, $groups);
+    my ($err, $ip, $opts, $utmp, $user, $groups);
 
     if ($cmd eq "update") {
         return "3 arguments required" if $#arg != 3;
+
+        $opts = $arg[1];
 
         ($err, $ip) = select_ip($arg[2]);
         return $err if $err;
@@ -69,7 +71,7 @@ sub handle_request (@) {
         $err = update_user_mapping($cmd, $ip, $utmp, undef);
         return $err if $err;
 
-        $groups = pack_groups($utmp) if $arg[1] =~ /g/;
+        $groups = pack_groups($utmp) if $opts =~ /g/;
     }
     elsif ($cmd eq "auth") {
         return "2 arguments required" if $#arg != 2;
@@ -86,12 +88,19 @@ sub handle_request (@) {
         $groups = pack_groups( [{ user => $arg[1] }] );
     }
     elsif ($cmd eq "login") {
-        ($err, $ip, $user, $utmp) = verify_login_arguments(@arg);
+        ($err, $ip, $opts, $user, $utmp) = verify_login_arguments(@arg);
         return $err if $err;
+
         $err = update_user_mapping($cmd, $ip, $utmp, $user);
+        return $err if $err;
+
+        if ($opts =~ /g/) {
+            push @$utmp, $user;
+            $groups = pack_groups($utmp);
+        }
     }
     elsif ($cmd eq "logout") {
-        ($err, $ip, $user, $utmp) = verify_login_arguments(@arg);
+        ($err, $ip, $opts, $user, $utmp) = verify_login_arguments(@arg);
         return $err if $err;
         $err = update_user_mapping($cmd, $ip, $utmp, $user);
     }
@@ -122,8 +131,8 @@ sub unpack_utmp ($) {
 
 sub verify_login_arguments (@) {
     my (@arg) = @_;
-    my ($err, $ip, $user, $utmp);
-    return "5 arguments required" if $#arg != 5;
+    my ($err, $ip, $user, $opts, $utmp);
+    return "6 arguments required" if $#arg != 6;
 
     $err = verify_user($arg[1]);
     return $err if $err;
@@ -131,14 +140,16 @@ sub verify_login_arguments (@) {
     return "invalid sid" if !$arg[2];
     return "invalid time" if $arg[3] !~ /^\d+$/;
 
-    ($err, $ip) = select_ip($arg[4]);
+    $opts = $arg[4];
+
+    ($err, $ip) = select_ip($arg[5]);
     return $err if $err;
 
-    ($err, $utmp) = unpack_utmp($arg[5]);
+    ($err, $utmp) = unpack_utmp($arg[6]);
     return $err if $err;
     
     $user = { user => $arg[1], sid => $arg[2], btime => $arg[3] };
-    return (0, $ip, $user, $utmp);
+    return (0, $ip, $opts, $user, $utmp);
 }
 
 sub verify_user ($) {
