@@ -29,10 +29,13 @@
 #include <assert.h>
 #include <syslog.h>
 #include <unistd.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-#include <pwd.h>
+#include <errno.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include "config.h"
 
@@ -42,28 +45,126 @@
 #define EXPORT_SYMBOL
 #endif
 
+#define UW_DEBUG	1
+#define UW_ERROR	0
+
+#define UW_CONFIG_FILE 	"/etc/userwatch/uw-client.conf"
+#define UW_SOCKET_PATH	"/var/run/userwatch/uw-client.sock"
+#define UW_DATA_NAME	"pam_userwatch_data"
+#define UW_MAGIC		0x5A61C
+#define UW_CFG_LINE_MAX	256
+#define UW_SOCK_BUF_MAX	128
+
+static void uw_cleanup (pam_handle_t *, void *, int);
 
 typedef struct {
+	int			magic;
 	int			debug;
+	int			use_auth_tok;
+	char *		socket_path;
+	int			sock;
+	const char *service;
+	const char *func;
 	const char *user;
+	const char *tty;
+	const char *rhost;
 } uw_state_t;
 
 
+/*
+	Logging
+*/
 static void
 uw_log(const uw_state_t *uw, int is_debug, const char *fmt, ...)
 {
 	char *format;
 	va_list ap;
-	if (is_debug && NULL != uw && !uw->debug)
+	char pid[12];
+	const char *func;
+	const char *service;
+	const char *user;
+
+	if (is_debug && uw && !uw->debug)
 		return;
-	format = malloc(strlen(fmt) + 32);
-	strcpy(format, "pam_userwatch(): ");
+
+	func = uw && uw->func ? uw->func : "";
+	service = uw && uw->service ? uw->service : "";
+	user = uw && uw->user ? uw->user : "";
+	sprintf(pid, "%u", (int)getpid());
+
+	format = malloc(strlen(fmt) + strlen(service) + strlen(func)
+					+ strlen(user) + strlen(pid) + 32);
+	strcpy(format, "pam_userwatch(");
+	strcat(format, service);
+	strcat(format, "/");
+	strcat(format, func);
+	strcat(format, ":");
+	strcat(format, user);
+	strcat(format, ":");
+	strcat(format, pid);
+	strcat(format, "): ");
 	strcat(format, fmt);
 	strcat(format, "\n");
+
 	va_start(ap, fmt);
 	vsyslog(LOG_AUTHPRIV | LOG_INFO, format, ap);
 	va_end(ap);
 	free(format);
+}
+
+
+/*
+	Parse config file and get unix socket path
+*/
+static void
+uw_parse_config (uw_state_t *uw, const char *config_path)
+{
+	FILE *file;
+	char line[UW_CFG_LINE_MAX];
+	char c;
+	char *p, *param, *value;
+	
+	file = fopen(config_path, "r");
+	if (!file)
+		return;
+
+	while (fgets(line, sizeof(line)-1, file)) {
+		/* Remove trailing whitespace */
+		p = line + strlen(line) - 1;
+		while (p >= line && (isspace(*p) || *p == '\r' || *p == '\n'))
+			*p-- = 0;
+
+		/* Skip leading whitespace */
+		for(p = line; isspace(*p); p++);
+
+		/* Skip empty lines and comments */
+		if(!*p || *p == '#')
+			continue;
+
+		/* Pull parameter name */
+		param = p;
+		while(*p && !isspace(*p) && *p != '=') p++;
+		if(!*p) continue; /* Syntax error */
+		c = *p;
+		*p++ = 0;
+
+		/* Skip equal sign and whitespace */
+		while(isspace(c)) c = *p++;
+		if(c != '=') continue; /* Syntax error */
+		while(isspace(*p)) p++;
+
+		value = p;
+		/* uw_log(uw, UW_DEBUG, "config: %s=%s", param, value); */
+
+		if (!strcmp(param, "unix_socket")) {
+			if (uw->socket_path)
+				free(uw->socket_path);
+			uw->socket_path = strdup(value);
+			break;
+		}
+	}
+
+	fclose(file);
 }
 
 
@@ -74,29 +175,233 @@ uw_log(const uw_state_t *uw, int is_debug, const char *fmt, ...)
 		- get unix socket path
 */
 static uw_state_t *
-uw_prepare(pam_handle_t *pamh, int flags, int argc, const char **argv)
+uw_prepare (const char *func, pam_handle_t *pamh,
+			int flags, int argc, const char **argv)
 {
 	uw_state_t *uw = NULL;
 	int i, ret;
 
-	uw = malloc(sizeof(*uw));
-	memset(uw, 0, sizeof(*uw));
-	uw->debug = 1;
+	/* Initialize instance descriptor */
+	
+	ret = pam_get_data(pamh, UW_DATA_NAME, (const void **) &uw);
+	if (ret != PAM_SUCCESS || uw == NULL) {
+		uw = malloc(sizeof(*uw));
+		uw->magic = 0;
+	}
+	if (uw->magic != UW_MAGIC) {
+		memset(uw, 0, sizeof(*uw));
+		uw->magic = UW_MAGIC;
+		uw->sock = -1;
+		ret = pam_set_data(pamh, UW_DATA_NAME, uw, uw_cleanup);
+	}
+
+	uw->func = func;
 
 	for (i = 0; i < argc; i++) {
-		uw_log(uw, 1, "option: %s", argv[i] ? argv[i] : "NULL");
+		if (argv[i] && !strcmp(argv[i], "debug")) {
+			uw->debug = 1;
+		}
+		else if (argv[i] && !strcmp(argv[i], "useauthtok")) {
+			uw->use_auth_tok = 1;
+		}
+		uw_log(uw, UW_DEBUG, "option: %s", argv[i] ? argv[i] : "NULL");
 	}
+
+	/* Read core information: USER, SERVICE, TTY, RHOST */
 
 	ret = pam_get_user(pamh, &uw->user, NULL);
 	if (ret != PAM_SUCCESS) {
-		uw_log(uw, 0, "cannot get user");
+		uw_log(uw, UW_ERROR, "cannot get user");
 		uw->user = NULL;
 	}
-	uw_log(uw, 1, "user:%s", uw->user);
+
+	ret = pam_get_item(pamh, PAM_SERVICE, (const void **) &uw->service);
+	if (ret != PAM_SUCCESS) {
+		uw_log(uw, UW_ERROR, "cannot get service");
+		uw->service = NULL;
+	}
+
+	ret = pam_get_item(pamh, PAM_TTY, (const void **) &uw->tty);
+	if (ret != PAM_SUCCESS) {
+		uw_log(uw, UW_ERROR, "cannot get tty");
+		uw->tty = NULL;
+	}
+
+	ret = pam_get_item(pamh, PAM_RHOST, (const void **) &uw->rhost);
+	if (ret != PAM_SUCCESS) {
+		uw_log(uw, UW_ERROR, "cannot get rhost");
+		uw->rhost = NULL;
+	}
+
+	uw_log(uw, UW_DEBUG, "service:%s user:%s rhost:%s tty:%s",
+			uw->service, uw->user, uw->rhost, uw->tty);
+
+	/* Read configuration file */
+
+	if (uw->socket_path == NULL) {
+		uw_parse_config(uw, UW_CONFIG_FILE);
+		if (uw->socket_path == NULL)
+			uw->socket_path = strdup(UW_SOCKET_PATH);
+		uw_log(uw, UW_DEBUG, "socket_path:%s", uw->socket_path);
+	}
 
 	return uw;
 }
 
+
+/*
+	Disconnect from uw-client
+*/
+static void
+uw_disconnect (uw_state_t *uw)
+{
+	if (uw->sock >= 0) {
+		uw_log(uw, UW_DEBUG, "disconnected");
+		shutdown(uw->sock, SHUT_RDWR);
+		close(uw->sock);
+		uw->sock = -1;
+	}
+}
+
+
+/*
+	Cleanup
+*/
+static void
+uw_cleanup (pam_handle_t *pamh, void *data, int error_status)
+{
+	uw_state_t *uw = data;
+
+	if (uw && uw->magic == UW_MAGIC) {
+		uw_disconnect(uw);
+		if (uw->socket_path) {
+			free(uw->socket_path);
+		}
+		memset(uw, 0, sizeof(*uw));
+	}
+}
+
+
+/*
+	Connect to uw-client
+*/
+static int
+uw_connect (uw_state_t *uw)
+{
+	struct sockaddr_un *paddr;
+	int len, sock, ret;
+
+	sock = socket(PF_UNIX, SOCK_STREAM, 0);
+	if (sock < 0) {
+		uw_log(uw, UW_ERROR, "cannot create unix socket: %s", strerror(errno));
+		return PAM_SYSTEM_ERR;
+	}
+
+	len = sizeof(paddr->sun_family) + strlen(uw->socket_path);
+	paddr = (void *) malloc(len + 1);
+	paddr->sun_family = AF_UNIX;
+	strcpy(paddr->sun_path, uw->socket_path);
+
+	ret = connect(sock, (struct sockaddr *) paddr, len);
+	free(paddr);
+	if (ret < 0) {
+		uw_log(uw, UW_ERROR, "cannot connect unix socket: %s", strerror(errno));
+		close(sock);
+		return PAM_SYSTEM_ERR;
+	}
+
+	uw->sock = sock;
+	uw_log(uw, UW_DEBUG, "connected to uw-client", strerror(errno));
+	return PAM_SUCCESS;
+}
+
+/*
+	Send command to uw-client
+*/
+static int
+uw_send (uw_state_t *uw, const char *fmt, ...)
+{
+	int ret, len, bytes, off;
+	char buf[UW_SOCK_BUF_MAX];
+	va_list ap;
+
+	if (uw->sock < 0) {
+		ret = uw_connect(uw);
+		if (ret != PAM_SUCCESS)
+			return ret;
+	}
+
+	va_start(ap, fmt);
+	len = vsnprintf(buf, sizeof(buf)-2, fmt, ap);
+	va_end(ap);
+
+	if (len >= sizeof(buf)-2) {
+		uw_log(uw, UW_ERROR, "request buffer exhausted");
+		memset(buf, 0, sizeof(buf));
+		return PAM_SYSTEM_ERR;
+	}
+
+	strcat(buf, "\n");
+	len += 1;
+	off = 0;
+
+	while (len > 0) {
+		bytes = send(uw->sock, buf+off, len, MSG_NOSIGNAL);
+		if (bytes <= 0) {
+			if (errno == EINTR)
+				continue;
+			uw_log(uw, UW_ERROR, "send error: %s", strerror(errno));
+			close(uw->sock);
+			uw->sock = -1;
+			memset(buf, 0, sizeof(buf));
+			return PAM_SYSTEM_ERR;
+		}
+		off += bytes;
+		len -= bytes;
+	}
+
+	memset(buf, 0, sizeof(buf));
+	return PAM_SUCCESS;
+}
+
+static int
+uw_receive (uw_state_t *uw, char *buf, int buflen)
+{
+	int off, len, bytes;
+	char *p;
+
+	*buf = '\0';
+	if (uw->sock < 0)
+		return PAM_SYSTEM_ERR;
+
+	off = 0;
+	len = buflen;
+	while (1) {
+		len = buflen - off - 1;
+		if (len <= 0) {
+			uw_log(uw, UW_ERROR, "reply buffer exhausted");
+			return PAM_SYSTEM_ERR;
+		}
+		bytes = recv(uw->sock, buf+off, len, 0);
+		if (bytes <= 0) {
+			if (errno == EINTR)
+				continue;
+			uw_log(uw, UW_ERROR, "receive error: %s", strerror(errno));
+			close(uw->sock);
+			uw->sock = -1;
+			return PAM_SYSTEM_ERR;
+		}
+		off += bytes;
+		buf[off] = '\0';
+		p = strchr(buf, '\n');
+		if (p) {
+			*p = '\0';
+			break;
+		}
+	}
+
+	return PAM_SUCCESS;
+}
 
 /*
 	pam_sm_open_session
@@ -104,10 +409,18 @@ uw_prepare(pam_handle_t *pamh, int flags, int argc, const char **argv)
 	Returns the PAM error code or %PAM_SUCCESS.
 */
 PAM_EXTERN EXPORT_SYMBOL int
-pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv)
+pam_sm_open_session (pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
-	uw_log(uw, 1, "open session");
+	uw_state_t *uw = uw_prepare("session", pamh, flags, argc, argv);
+	char buf[UW_SOCK_BUF_MAX];
+
+	uw_log(uw, UW_DEBUG, "open session");
+	uw_send(uw, "echo open_session");
+	uw_receive(uw, buf, sizeof(buf));
+	uw_log(uw, UW_DEBUG, "received \"%s\"", buf);
+	memset(buf, 0, sizeof(buf));
+	uw_disconnect(uw);
+
 	return PAM_SUCCESS;
 }
 
@@ -118,10 +431,17 @@ pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv)
 */
 PAM_EXTERN EXPORT_SYMBOL
 int
-pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **argv)
+pam_sm_close_session (pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
-	uw_log(uw, 1, "close session");
+	uw_state_t *uw = uw_prepare("session", pamh, flags, argc, argv);
+	char buf[UW_SOCK_BUF_MAX];
+
+	uw_log(uw, UW_DEBUG, "close session");
+	uw_send(uw, "echo close_session");
+	uw_receive(uw, buf, sizeof(buf));
+	uw_log(uw, UW_DEBUG, "received \"%s\"", buf);
+	uw_disconnect(uw);
+
 	return PAM_SUCCESS;
 }
 
@@ -132,9 +452,9 @@ pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **argv)
 */
 PAM_EXTERN EXPORT_SYMBOL
 int
-pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
+pam_sm_authenticate (pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
+	uw_state_t *uw = uw_prepare("auth", pamh, flags, argc, argv);
 	uw_log(uw, 1, "authenticate");
 	return PAM_SUCCESS;
 }
@@ -146,10 +466,8 @@ pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
 */
 PAM_EXTERN EXPORT_SYMBOL
 int
-pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv)
+pam_sm_setcred (pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
-	uw_log(uw, 1, "setcred");
 	return PAM_SUCCESS;
 }
 
@@ -160,10 +478,8 @@ pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv)
 */
 PAM_EXTERN EXPORT_SYMBOL
 int
-pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv)
+pam_sm_chauthtok (pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
-	uw_log(uw, 1, "chauthtok");
 	return PAM_SUCCESS;
 }
 
@@ -174,10 +490,8 @@ pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv)
 */
 PAM_EXTERN EXPORT_SYMBOL
 int
-pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv)
+pam_sm_acct_mgmt (pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	uw_state_t *uw = uw_prepare(pamh, flags, argc, argv);
-	uw_log(uw, 1, "acct_mgmt");
 	return PAM_SUCCESS;
 }
 
