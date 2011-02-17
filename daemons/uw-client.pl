@@ -259,15 +259,15 @@ sub queue_job ($$$%) {
 
 sub handle_next_job () {
     unless (@jobs) {
-        debug("next job: queue empty");
+        debug("job queue empty");
         return;
     }
     unless ($srv_chan) {
-        debug("next job: no connection");
+        debug("job postponed: no connection");
         return;
     }
     if ($srv_chan->{io_watch}) {
-        debug("next job: another job running");
+        debug("another job running");
         return;
     }
 
@@ -464,7 +464,7 @@ sub unix_accept_pending () {
     init_timeouts($c_chan, \&ev_close);
     $c_chan->{r_buf} = "";
     init_transmission($c_chan, &EV::READ, \&_unix_read_pending);
-    debug('accepted unix %s', $c_chan->{addr});
+    debug("[%s] accepted", $c_chan->{addr});
     return $c_chan;
 }
 
@@ -474,7 +474,7 @@ sub _unix_read_pending ($) {
     fire_transmission($chan);
     my $len = $chan->{conn}->sysread($chan->{r_buf}, 1024, length($chan->{r_buf}));
     if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
-        debug("%s: will read later", $chan->{addr});
+        debug("[%s] postpone read", $chan->{addr});
         return;
     }
 
@@ -483,7 +483,7 @@ sub _unix_read_pending ($) {
             #debug("%s: read %s bytes", $chan->{addr}, defined($len) ? $len : "?");
             postpone_timeouts($chan);
         } else {
-            info("%s: read failed: %s", $chan->{addr}, $!);
+            debug("[%s] read failed: %s", $chan->{addr}, $!);
             ev_close($chan);
         }
         return;
@@ -500,7 +500,7 @@ sub unix_write_reply ($$) {
     $chan->{w_buf} = $reply . "\n";
     init_transmission($chan, &EV::WRITE, \&_unix_write_pending);
     fire_transmission($chan);
-    debug("sending \"%s\" to [%s]", $reply, $chan->{addr});
+    debug("send \"%s\" to [%s]", $reply, $chan->{addr});
 }
 
 sub _unix_write_pending ($) {
@@ -508,13 +508,13 @@ sub _unix_write_pending ($) {
 
     my $len = $chan->{conn}->syswrite($chan->{w_buf});
     if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
-        debug("%s: will write later", $chan->{addr});
+        debug("[%s] postpone write", $chan->{addr});
         return;
     }
 
     #debug("%s: write %s bytes", $chan->{addr}, defined($len) ? $len : "?");
     unless ($len) {
-        info("%s: write failed: %s", $chan->{addr}, $!);
+        debug("[%s] write failed: %s", $chan->{addr}, $!);
         ev_close($chan);
         return;
     }
@@ -530,7 +530,7 @@ sub _unix_write_pending ($) {
 
 sub unix_disconnect ($) {
     my ($chan) = @_;
-    debug("close channel %s", $chan->{addr});
+    debug("[%s] closed", $chan->{addr});
     ssl_disconnect($chan);
     if ($chan->{path}) {
         unlink($chan->{path});
