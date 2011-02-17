@@ -43,6 +43,14 @@ sub handle_unix_request ($$) {
     my ($chan, $req) = (@_);
     my (@arg) = split(/\s+/, $req);
     my $cmd = $arg[0];
+
+    if ($uw_config{debug}) {
+    	my $pkt = $req;
+    	# hide password from log
+    	$pkt =~ s/\s\S+$/ \*\*\*/ if $pkt =~ /%auth /;
+    	debug("received \"%s\" from [%s]", $pkt, $chan->{addr});
+    }
+
     rescan_etc();
 
     if ($cmd eq "echo") {
@@ -445,7 +453,7 @@ sub unix_accept_pending () {
         addr => $addr
         };
 
-    if ($euid != 0) {
+    if ($euid != 0 && $prog ne "/bin/su") {
         info("reject connection from pid:$pid euid:$euid prog:$prog");
         ev_close($c_chan);
         return;
@@ -483,7 +491,6 @@ sub _unix_read_pending ($) {
 
     end_transmission($chan);
     chomp($chan->{r_buf});
-    #debug("received from %s: \"%s\"", $chan->{addr}, $chan->{r_buf});
     my $reply = handle_unix_request($chan, $chan->{r_buf});
     unix_write_reply($chan, $reply) if defined $reply;
 }
