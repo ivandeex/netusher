@@ -538,14 +538,17 @@ sub write_file ($$) {
     return $sign;
 }
 
-my $clock_gettime_exists = Time::HiRes->can("clock_gettime");
+my $lack_monotonic = Time::HiRes->can("clock_gettime") ? 2 : 0;
 
 sub monotonic_time () {
-    if ($clock_gettime_exists) {
-        return Time::HiRes::clock_gettime(&Time::HiRes::CLOCK_MONOTONIC);
-    } else {
+    if ($lack_monotonic) {
+        if ($lack_monotonic == 2) {
+            info("warning: your system lacks CLOCK_MONOTONIC");
+            $lack_monotonic = 1;
+        }
         return Time::HiRes::time();
     }
+    return Time::HiRes::clock_gettime(&Time::HiRes::CLOCK_MONOTONIC);
 }
 
 ##############################################
