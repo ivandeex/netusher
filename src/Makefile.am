@@ -29,7 +29,7 @@ pam_userwatch_so_SOURCES = uw-pam.c
 pam_userwatch_so_LDFLAGS = -shared
 pam_userwatch_so_LDADD = -lpam
 
-pam_userwatch_so_CFLAGS = $(GLIB_CFLAGS) -D_REENTRANT -pipe @GCC_FVISIBILITY_HIDDEN@
+pam_userwatch_so_CFLAGS = $(GLIB_CFLAGS) -D_REENTRANT $(AM_CFLAGS) -pipe @GCC_FVISIBILITY_HIDDEN@
 
 install-exec-local: install-pam_userwatch_so
 
