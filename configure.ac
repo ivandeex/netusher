@@ -67,8 +67,12 @@ AC_ARG_WITH([pamdir],
 
 AC_MSG_CHECKING(for PAM directory)
 test "$PAM_MODDIR" = "no"  && AC_MSG_ERROR([PAM support is required])
-test "$PAM_MODDIR" = "yes" && PAM_MODDIR="/lib/security"
-test -d "$PAM_MODDIR"      || AC_MSG_ERROR([$PAM_MODDIR not found])
+if test "$PAM_MODDIR" = "yes"; then
+    dnl -- prefer 64-bit location, if it exists
+    PAM_MODDIR="/lib64/security"
+    test -d "$PAM_MODDIR" || PAM_MODDIR="/lib/security"
+fi
+test -d "$PAM_MODDIR" || AC_MSG_ERROR([$PAM_MODDIR not found])
 AC_MSG_RESULT([$PAM_MODDIR])
 
 AC_SUBST(PAM_MODDIR)
