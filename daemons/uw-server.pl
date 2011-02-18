@@ -85,10 +85,6 @@ sub handle_request (@) {
 
         $err = &{$nss{user_auth}}($arg[1], $arg[2]);
     }
-    elsif ($cmd eq "groups") {
-        return "1 argument required" if $#arg != 1;
-        $groups = pack_groups( [{ user => $arg[1] }] );
-    }
     elsif ($cmd eq "login") {
         ($err, $ip, $opts, $user, $utmp) = verify_login_arguments(@arg);
         return $err if $err;

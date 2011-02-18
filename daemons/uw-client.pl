@@ -64,16 +64,10 @@ sub handle_unix_request ($$) {
                     : user_auth($arg[1], $arg[2], $chan);
     } elsif ($cmd eq "login") {
         return $#arg != 2 ? "usage: login user sid"
-                    : user_login($arg[1], $arg[2], 1, 1, $chan);
+                    : user_login($arg[1], $arg[2], $chan);
     } elsif ($cmd eq "logout") {
         return $#arg != 2 ? "usage: logout user sid"
                     : user_logout($arg[1], $arg[2], $chan);
-    } elsif ($cmd eq "groups_only") {
-        return $#arg != 1 ? "usage: groups_only user"
-                    : user_login($arg[1], undef, 0, 1, $chan);
-    } elsif ($cmd eq "login_only") {
-        return $#arg != 2 ? "usage: login_only user sid"
-                    : user_login($arg[1], $arg[2], 1, 0, $chan);
     } else {
         return "usage: echo|update|auth|login|logout|groups_only|login_only [args...] ;"
               ." SIDs: tty\@rhost xdm/N net/N con/N pty/N";
@@ -157,62 +151,46 @@ sub user_auth ($$$) {
     return;
 }
 
-sub user_login ($$$$$) {
-    my ($user, $sid, $do_login, $do_groups, $chan) = @_;
-    my $wait = 0;
+sub user_login ($$$) {
+    my ($user, $sid, $chan) = @_;
 
-    if ($do_login) {
-        if (is_local_user($user)) {
-            debug("$user: local user login");
-        } else {
-            my $opts = "";
-            if ($do_groups && !$uw_config{prefer_nss}) {
-                $opts .= "g";
-                $do_groups = 0;
-            }
-            my $req = join("|", $user, $sid, time, $opts,
-                            pack_ips(), pack_utmp());
-            queue_job("login", $req, $chan, info => "$user: login",
-                        user => $user, sid => $sid);
-            $wait = 1;
-            undef $chan; # so that next job (if any) will run in background
-        }
+    if (is_local_user($user)) {
+        return "local login";
     }
 
-    if ($do_groups) {
-        if ($uw_config{prefer_nss}) {
-            if ($uw_config{enable_gmirror}) {
-                gmirror_apply(make_job("groups", undef, undef, user => $user));
-            }
-        }
-        elsif (is_local_user($user)) {
-            debug("$user: local user groups");
-        }
-        else {
-            queue_job("groups", $user, $chan, user => $user);
-            $wait = 1;
-            undef $chan; # so that next job (if any) will run in background
-        }
+    # Let PAM wait only if group mirroring depends on uw-server.
+    # Otherwise, perform group mirroring if needed, and let PAM continue.
+    my $wait = ($uw_config{enable_gmirror} && !$uw_config{prefer_nss});
+
+    my $opts = $wait ? "g" : "";
+    my $req = join("|", $user, $sid, time, $opts, pack_ips(), pack_utmp());
+    my $job = queue_job("login", $req, ($wait ? $chan : undef),
+                        info => "$user: login", user => $user, sid => $sid);
+
+    if ($uw_config{enable_gmirror} && !$wait) {
+        gmirror_apply($job);
     }
 
-    # return nothing so that channel will wait for server reply
     return $wait ? undef : "success";
 }
 
 sub user_logout ($$$) {
     my ($user, $sid, $chan) = @_;
+
     if (is_local_user($user)) {
-        debug("$user: local user logout");
-        return "local";
+        return "local logout";
     }
 
     my $req = join("|", $user, $sid, time, "", pack_ips(), pack_utmp());
-    my $job = queue_job("logout", $req, $chan, info => "$user: logout",
-                        user => $user, sid => $sid);
-    gmirror_apply($job);
+    my $job = queue_job("logout", $req, undef,
+                        info => "$user: logout", user => $user, sid => $sid);
 
-    # return nothing so that channel will wait for server reply
-    return;
+    if ($uw_config{enable_gmirror}) {
+        gmirror_apply($job);
+    }
+
+    # immediately declare success so that client does not wait
+    return "success";
 }
 
 #
