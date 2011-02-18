@@ -81,9 +81,7 @@ sub ssl_check_die ($;$) {
     my ($message, $non_fatal) = @_;
     my ($errors, $errnos) = ssl_get_error();
     return 0 unless @$errnos;
-    if (!$non_fatal) {
-       fail("${message}: ${errors}");
-    }
+    fail("${message}: ${errors}") unless $non_fatal;
     info("${message}: ${errors}");
     return -1;
 }
@@ -181,7 +179,7 @@ sub _ssl_cert_verify_cb {
 
 sub ssl_destroy_context () {
     Net::SSLeay::CTX_free($ssl_ctx) if $ssl_ctx;
-    ssl_check_die("SSL CTX_free");
+    ssl_check_die("SSL CTX_free", 1);
     undef $ssl_ctx;
 }
 
@@ -189,14 +187,14 @@ sub ssl_destroy_context () {
 # Each connection needs an SSL object,
 # which is associated with the shared CTX.
 #
-sub ssl_create_ssl ($$) {
-    my ($conn, $ctx) = @_;
+sub ssl_create_ssl ($$;$) {
+    my ($conn, $ctx, $non_fatal) = @_;
 
     my $ssl = Net::SSLeay::new($ctx);
-    ssl_check_die("SSL new");
+    return if ssl_check_die("ssl new", $non_fatal);
 
     Net::SSLeay::set_fd($ssl, fileno($conn));
-    ssl_check_die("SSL set_fd");
+    return if ssl_check_die("ssl set fd", $non_fatal);
 
     return $ssl;
 }
@@ -236,11 +234,12 @@ sub ssl_accept ($;$) {
     my ($s_chan, $close_handler) = @_;
 
     my $paddr = accept(my $conn, $s_chan->{conn});
-    unless ($paddr) {
+    if (!$paddr) {
         my $error = $!;
         info("ssl_accept accept error: $error");
         if ($error =~ /Invalid argument/i) {
-            info("the accept failure is probably caused by killed ldap child. reloading.");
+            info("the accept failure is probably caused by killed ldap child.");
+            info("reloading myself as a workaround...");
             kill(1, $$);
         }
         return;
@@ -257,12 +256,18 @@ sub ssl_accept ($;$) {
         };
 
     ssl_sock_opts($c_chan->{conn});
-    $c_chan->{ssl} = ssl_create_ssl($c_chan->{conn}, $ssl_ctx);
-    Net::SSLeay::accept($c_chan->{ssl});
-    ssl_check_die("SSL accept");
 
-    init_timeouts($c_chan, $close_handler);
-    return $c_chan;
+    $c_chan->{ssl} = ssl_create_ssl($c_chan->{conn}, $ssl_ctx, 1);
+    if (defined $c_chan->{ssl}) {
+        Net::SSLeay::accept($c_chan->{ssl});
+        if (!ssl_check_die("ssl accept", 1)) {
+            init_timeouts($c_chan, $close_handler);
+            return $c_chan;
+        }
+    }
+
+    # fatal error
+    return;
 }
 
 ##############################################
@@ -314,25 +319,30 @@ sub ssl_connect ($$;$) {
 sub ssl_connected ($;$) {
     my ($chan, $already_connected) = @_;
 
-    unless ($already_connected) {
+    if (!$already_connected) {
         my $ret = connect($chan->{conn}, $chan->{conn_params});
-        unless ($ret) {
+        if (!$ret) {
             return "pending" if $!{EINPROGRESS};
             info("%s: cannot connect: %s", $chan->{server}, $!);
             return "fail";
         }
-        debug("client connection ready");
     }
 
-    $chan->{type} = 'connected';
+    $chan->{type} = "connected";
     $chan->{pending} = 0;
 
-    $chan->{ssl} = ssl_create_ssl($chan->{conn}, $ssl_ctx);
-    Net::SSLeay::connect($chan->{ssl});
-    ssl_check_die("SSL connect");
+    $chan->{ssl} = ssl_create_ssl($chan->{conn}, $ssl_ctx, 1);
+    if (defined $chan->{ssl}) {
+        Net::SSLeay::connect($chan->{ssl});
+        if (!ssl_check_die("ssl connect", 1)) {
+            init_timeouts($chan, $chan->{close_handler});
+            debug("client connection ready") if !$already_connected;
+            return "ok";
+        }
+    }
 
-    init_timeouts($chan, $chan->{close_handler});
-    return "ok";
+    # connection failure
+    return "fail";
 }
 
 #
@@ -348,7 +358,7 @@ sub ssl_disconnect ($) {
     # Paired with closing connection.
     if ($chan->{ssl}) {
         Net::SSLeay::free($chan->{ssl});
-        ssl_check_die("SSL free");
+        ssl_check_die("SSL free", 1);
         delete $chan->{ssl};
     }
     if ($chan->{conn}) {
@@ -383,6 +393,7 @@ sub _ssl_read_pending ($) {
     #
     my $bytes = $chan->{r_bytes};
     $bytes = 16384 if $bytes > 16384;
+    my $handler = $chan->{r_handler};
 
     #
     # Repeat read() until EAGAIN before select()ing for more. SSL may already be
@@ -396,7 +407,11 @@ sub _ssl_read_pending ($) {
     # after writing.
     #
     my $buf = Net::SSLeay::read($chan->{ssl}, $bytes);
-    ssl_check_die("SSL read", "non-fatal");
+    if (ssl_check_die("ssl read", 1)) {
+        end_transmission($chan);
+        &$handler($chan, undef, $chan->{r_param});
+        return;
+    }
 
     # reset wait mode to read/write: ssl might need re-negotiation etc
     change_event_mask($chan, &EV::READ | &EV::WRITE);
@@ -409,7 +424,6 @@ sub _ssl_read_pending ($) {
         return;
     }
 
-    my $handler = $chan->{r_handler};
     unless (defined $buf) {
         debug("%s: read failed: %s", $chan->{addr}, $!);
         end_transmission($chan);
@@ -485,17 +499,21 @@ sub ssl_write_packet ($$$$) {
 sub _ssl_write_pending ($) {
     my ($chan) = @_;
 
+    my $handler = $chan->{w_handler};
     my $total = length($chan->{w_buf});
     #debug('writing %s bytes', $total);
     my $bytes = Net::SSLeay::write($chan->{ssl}, $chan->{w_buf});
-    ssl_check_die("SSL write");
+    if (ssl_check_die("ssl write", 1)) {
+        end_transmission($chan);
+        &$handler($chan, 0, $chan->{w_param});
+        return;
+    }
 
     if ($!{EAGAIN} || $!{EINTR} || $!{ENOBUFS}) {
         #debug("will write later: again=%s intr=%s nobufs=%s", $!{EAGAIN}, $!{EINTR}, $!{ENOBUFS});
         return;
     }
 
-    my $handler = $chan->{w_handler};
     unless ($bytes) {
         debug("%s: write failed: %s", $chan->{addr}, $!);
         end_transmission($chan);
