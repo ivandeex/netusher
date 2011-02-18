@@ -199,6 +199,9 @@ sub user_logout ($$$) {
 #
 sub pack_ips () {
     my ($ips, $out);
+    $ips = cache_get("host", "netif");
+    return $ips if defined $ips;
+
     run_prog($uw_config{ifconfig}, \$out);
     for (split /\n/, $out) {
         next unless m"^\s+inet addr:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+\w";
@@ -206,6 +209,8 @@ sub pack_ips () {
         $ips .= $1 . ",";
     }
     $ips =~ s/,$//;
+
+    cache_put("host", "netif", $ips, $uw_config{netif_cache_ttl});
     debug("ip list: $ips");
     return $ips;
 }

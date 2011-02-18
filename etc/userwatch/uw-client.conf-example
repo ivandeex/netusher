@@ -90,10 +90,17 @@ server = uwserver.company.com
 # finding a user id and user group id by user name, or enumerating members
 # of a group. The default value of 2 seconds simply avoids repetitive
 # server (NSS) queries during a single client request.
-# Setting this to 0 completely disables caching.
+# Setting these to 0 completely disables caching.
 # Default: 2 seconds
 #uid_cache_ttl = 300
 #group_cache_ttl = 300
+
+# Parameters: netif_cache_ttl, utmp_cache_ttl
+# Cache time-to-live for network interface addresses and utmp data.
+# Setting these to 0 disables data caching.
+# Default: see below.
+#netif_cache_ttl = 180
+#utmp_cache_ttl = 2
 
 # Parameter: authorize_permit
 # Normally user authorization requests are passed to server.

@@ -410,6 +410,9 @@ sub get_skin_name () {
 # scan /var/utmpx
 #
 sub get_utmp () {
+    my $cached = cache_get("host", "utmp");
+    return @$cached if defined $cached;
+
     rescan_etc();
     my @list;
 
@@ -432,6 +435,7 @@ sub get_utmp () {
         #debug("utmp next: ".join(", ", map "$_=\"$ut->{$_}\"", sort keys %$ut));
     }
 
+    cache_put("host", "utmp", [ @list ], $uw_config{utmp_cache_ttl});
     return @list;
 }
 
