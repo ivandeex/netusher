@@ -595,6 +595,9 @@ uninstall-info: uninstall-info-recursive
 
 release : dist ./release.sh
 	./release.sh
+
+perl-encode-setup:
+	perl -MEncode::ConfigLocal -e1 || enc2xs -C
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.
 .NOEXPORT:
