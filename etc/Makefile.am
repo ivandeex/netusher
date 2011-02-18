@@ -16,13 +16,8 @@
 # 02110-1301 USA
 #
 
-EXTRA_DIST = autogen.sh
+EXTRA_DIST = init.d/uw-client init.d/uw-server
 
-SUBDIRS=src daemons etc
-
-release: dist ./release.sh
-	./release.sh
-
-perl-encode-setup:
-	perl -MEncode::ConfigLocal -e1 || enc2xs -C
-
+dist_sysconf_DATA = \
+	userwatch/gmirror.conf-example userwatch/uw-client.conf-example userwatch/uw-server.conf-example
+	

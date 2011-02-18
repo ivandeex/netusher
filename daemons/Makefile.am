@@ -16,13 +16,12 @@
 # 02110-1301 USA
 #
 
-EXTRA_DIST = autogen.sh
+daemonsdir = $(pkgdatadir)/daemons
 
-SUBDIRS=src daemons etc
+dist_daemons_SCRIPTS = \
+		uw-client.pl uw-server.pl test.pl openvpn-event.sh-example
 
-release: dist ./release.sh
-	./release.sh
-
-perl-encode-setup:
-	perl -MEncode::ConfigLocal -e1 || enc2xs -C
+dist_daemons_DATA = \
+		uw-common.inc.pm uw-ssl.inc.pm uw-cache.inc.pm uw-groups.inc.pm \
+		uw-ldap.inc.pm uw-vpn.inc.pm
 
