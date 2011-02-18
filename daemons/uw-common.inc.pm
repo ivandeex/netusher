@@ -104,7 +104,7 @@ our %uw_config =
         ldap_attr_group     => "cn",
         ldap_attr_member    => "memberUid",
         ldap_timeout        => 5,
-        ldap_force_fork     => 0,
+        ldap_force_fork     => "never",
 
         # server parameters (operation)
         user_retention      => 300,

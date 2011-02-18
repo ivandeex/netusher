@@ -48,9 +48,20 @@ sub ldap_init ($) {
     # badly affects main SSL exchange.
     # Workaround: fork a subprocess for LDAP.
     #
-    my $need_fork = $uw_config{ldap_start_tls}
-                    || ($uw_config{ldap_uri} =~ m/^ldaps:/);
-    $need_fork = 1 if $uw_config{ldap_force_fork};
+    my $need_fork;
+    if ($uw_config{ldap_force_fork} eq "never") {
+        $need_fork = 0;
+    } elsif ($uw_config{ldap_force_fork} eq "always") {
+        $need_fork = 1;
+    } elsif ($uw_config{ldap_force_fork} eq "auto") {
+        # fork only if connection is ssl
+        my $conn_is_ssl = ($uw_config{ldap_uri} =~ m/^ldaps:/)
+                        || $uw_config{ldap_start_tls};
+        $need_fork = $conn_is_ssl;
+    } else {
+        fail("$config_file: ldap_force_fork should be one of never,always,auto");
+    }
+
     if ($first_init && $need_fork) {
         info("connecting to ldap later as connecting now would screw up ssl");
         return "ssl";

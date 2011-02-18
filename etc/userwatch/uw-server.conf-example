@@ -303,11 +303,19 @@ ldap_group_base = ou=groups,dc=company,dc=com
 #debug = 1
 
 # Parameter: ldap_force_fork
-# Normally daemon forks only if LDAP connection is SSL and run as single
-# process otherwise. This parameter will force the fork.
-# You are not supposed to use it. 
-# Default: 0
-#ldap_force_fork = 1
+# Client and server UserWatch daemons interact over a secure SSL connection.
+# The server also can connect to OpenLDAP for user authentication or for
+# credential queries, and this connection can also be secure (if LDAPS or
+# StartTLS is used). The Perl Net::LDAP implementation will the use the
+# same Net::SSLeay package as the daemon itself. In certain cases with some
+# SSLeay versions this sharing triggers fatal SSL errors. As a workaround,
+# the daemon is able to fork off a separate process for LDAP interaction.
+# This parameter controls when the daemon forks:
+#   never  - use if your versions of the perl modules work fine
+#   always - this is only intended for testing and debugging
+#   auto   - fork only if LDAP connection would use SSL
+# Default: never
+#ldap_force_fork = auto
 
 # Parameter: authorize_permit
 # Normally user authorization requests are passed to LDAP.
