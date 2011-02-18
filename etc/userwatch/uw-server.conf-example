@@ -241,11 +241,11 @@ vpn_net = 192.168.0.0
 #
 
 # Parameter: prefer_nss
-# Normally server will connect to LDAP for user and group information
-# or to authorize users. If this parameter is non-zero, the server will
-# skip LDAP and use normal NSS instead.
-# Default: 0
-#prefer_nss = 1
+# If this parameter is non-zero, server will connect to LDAP for user
+# and group information or to authorize users. Otherwise, the server
+# will skip LDAP and use normal NSS instead.
+# Default: 1
+#prefer_nss = 0
 
 # Parameter: ldap_uri
 # URI of LDAP server in the form ldap[s]://hostname[:port]
@@ -254,7 +254,7 @@ vpn_net = 192.168.0.0
 # the Perl SSL implementation, the daemon will fork before opening
 # ldaps connection, increasing total memory footprint.
 # Default: none, required if prefer_nss is not set.
-ldap_uri = ldap://ldap.company.com
+#ldap_uri = ldap://ldap.company.com
 
 # Parameter: ldap_start_tls
 # Setting this to 1 will initiate StartTLS on standard LDAP connection.
@@ -270,15 +270,15 @@ ldap_uri = ldap://ldap.company.com
 # Parameters: ldap_bind_dn, ldap_bind_pass
 # These parameters define DN and password for LDAP connection.
 # Default: none, required if prefer_nss is not set.
-ldap_bind_dn = cn=bindn,dc=company,dc=com
-ldap_bind_pass = secret
+#ldap_bind_dn = cn=bindn,dc=company,dc=com
+#ldap_bind_pass = secret
 
 # Parameters: ldap_user_base, ldap_group_base
 # These parameters define base in the LDAP tree for searching for
 # user and group entries.
 # Default: none, required if prefer_nss is not set.
-ldap_user_base = ou=users,dc=company,dc=com
-ldap_group_base = ou=groups,dc=company,dc=com
+#ldap_user_base = ou=users,dc=company,dc=com
+#ldap_group_base = ou=groups,dc=company,dc=com
 
 # Parameters: ldap_attr_user, ldap_attr_uid, ldap_attr_gid,
 #             ldap_attr_group, ldap_attr_member

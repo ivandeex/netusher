@@ -70,11 +70,11 @@ server = uwserver.company.com
 #update_interval = 240
 
 # Parameter: prefer_nss
-# Normally client will connect to UW-server for user and group information
-# or to authorize users. If this parameter is non-zero, the client will
-# use normal NSS instead.
-# Default: 0
-#prefer_nss = 1
+# If this parameter is zero, client will connect to UW-server for user
+# and group information or to authorize users. Otherwise, the client
+# will use normal NSS.
+# Default: 1
+#prefer_nss = 0
 
 # Parameters: auth_cache_ttl
 # Client daemon can remember successful user authentications
