@@ -538,7 +538,7 @@ sub write_file ($$) {
     return $sign;
 }
 
-my $lack_monotonic = Time::HiRes->can("clock_gettime") ? 2 : 0;
+my $lack_monotonic = Time::HiRes->can("clock_gettime") ? 0 : 2;
 
 sub monotonic_time () {
     if ($lack_monotonic) {
