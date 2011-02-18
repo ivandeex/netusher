@@ -14,7 +14,7 @@ use Carp;
 use Sys::Syslog;
 use POSIX;
 use EV;
-use Time::HiRes qw(gettimeofday clock_gettime CLOCK_MONOTONIC);
+use Time::HiRes;
 
 # request header options
 use constant OPT_USER_LIST  => 1;
@@ -207,7 +207,7 @@ sub debug ($@) {
 
 sub _fmtmsg ($) {
     my ($msg) = @_;
-    my ($sec, $usec) = gettimeofday();
+    my ($sec, $usec) = Time::HiRes::gettimeofday();
     return sprintf("[%s.%03d] [%5d] %s\n",
                     POSIX::strftime('%H:%M:%S', localtime($sec)),
                     $usec/1000, $$, $msg);
@@ -538,8 +538,14 @@ sub write_file ($$) {
     return $sign;
 }
 
+my $clock_gettime_exists = Time::HiRes->can("clock_gettime");
+
 sub monotonic_time () {
-    return clock_gettime(CLOCK_MONOTONIC);
+    if ($clock_gettime_exists) {
+        return Time::HiRes::clock_gettime(&Time::HiRes::CLOCK_MONOTONIC);
+    } else {
+        return Time::HiRes::time();
+    }
 }
 
 ##############################################
