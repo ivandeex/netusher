@@ -375,6 +375,7 @@ sub daemonize () {
     $in_parent = $pid;
     if ($in_parent) {
         debug("parent exits");
+        cleanup();
         exit(0);
     }
 
