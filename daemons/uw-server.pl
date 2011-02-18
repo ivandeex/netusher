@@ -286,6 +286,7 @@ sub update_user_mapping ($$$$) {
 
 sub purge_expired_users () {
     debug("purge expired users");
+    cache_gc();
     mysql_execute(sprintf("
         UPDATE uw_users SET running = 0
         WHERE running = 1 AND end_time < DATE_SUB(NOW(), INTERVAL %s SECOND)",

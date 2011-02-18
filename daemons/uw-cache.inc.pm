@@ -20,15 +20,43 @@ use Digest::MD5 qw(md5_hex);
 use User::getgrouplist;
 
 our (%uw_config, %nss, %local_groups);
-my  (%uid_grp_cache, %group_cache, %auth_cache);
+my  (%cache_pool);
 
 #
-# flush all caches
+# generic cache API.
 #
 sub cache_flush () {
-    %uid_grp_cache = ();
-    %group_cache = ();
-    %auth_cache = ();
+    %cache_pool = ();
+}
+
+sub cache_put ($$$$) {
+    my ($pool, $key, $value, $ttl) = @_;
+    return if $ttl <= 0;
+    $cache_pool{$pool}{$key} = [ monotonic_time() + $ttl, $value ];
+}
+
+sub cache_get ($$) {
+    my ($pool, $key) = @_;
+    my $item = $cache_pool{$pool}{$key};
+    if ($item) {
+        if (monotonic_time() - $item->[0] < 0) {
+            return $item->[1];
+        }
+        delete $cache_pool{$pool}{$key};
+    }
+    return undef;
+}
+
+sub cache_gc () {
+    my $now = monotonic_time();
+    for my $pool (keys %cache_pool) {
+        for my $key (keys %{ $cache_pool{$pool} }) {
+            my $item = $cache_pool{$pool}{$key};
+            if ($now - $item->[0] >= 0) {
+                delete $cache_pool{$pool}{$key};
+            }
+        }
+    }
 }
 
 #
@@ -39,16 +67,12 @@ sub get_user_uid_grp ($$) {
     my ($err, $uid, $grp);
 
     # try to fetch uid from cache
-    my $ttl = $uw_config{uid_cache_ttl};
-    if ($ttl > 0 && exists($uid_grp_cache{$user})) {
-        if (monotonic_time() - $uid_grp_cache{$user}{stamp} < $ttl) {
-            $uid = $uid_grp_cache{$user}{uid};
-            $grp = $uid_grp_cache{$user}{grp};
-            debug("get user:$user from:cache uid:$uid grp:$grp");
-            $$grp_ref = $grp if defined $grp_ref;
-            return $uid;
-        }
-        delete $uid_grp_cache{$user};
+    my $item = cache_get("uid_grp", $user);
+    if (defined $item) {
+        ($uid, $grp) = @$item;
+        debug("get user:$user from:cache uid:$uid grp:$grp");
+        $$grp_ref = $grp if defined $grp_ref;
+        return $uid;
     }
 
     ($err, $uid, $grp) = &{$nss{get_user_uid_grp}}($user);
@@ -57,12 +81,8 @@ sub get_user_uid_grp ($$) {
         return;
     }
 
-    # update cache with defined or undefined uid
-    if ($ttl > 0) {
-        $uid_grp_cache{$user}{uid} = $uid;
-        $uid_grp_cache{$user}{grp} = $grp;
-        $uid_grp_cache{$user}{stamp} = monotonic_time();
-    }
+    # update cache with (defined or even undefined) uid
+    cache_put("uid_grp", $user, [ $uid, $grp ], $uw_config{uid_cache_ttl});
     debug("get user:$user from:$nss{name} uid:$uid grp:$grp");
     $$grp_ref = $grp if defined $grp_ref;
     return $uid;
@@ -75,15 +95,10 @@ sub get_user_groups ($) {
     my ($user) = @_;
     my ($err, $groups);
 
-    # try to fetch uid from cache
-    my $ttl = $uw_config{group_cache_ttl};
-    if ($ttl > 0 && exists($group_cache{$user})) {
-        if (monotonic_time() - $group_cache{$user}{stamp} < $ttl) {
-            $groups = $group_cache{$user}{groups};
-            debug("get user:$user from:cache groups:" . join(",", @$groups));
-            return ;
-        }
-        delete $group_cache{$user};
+    $groups = cache_get("groups", $user);
+    if (defined $groups) {
+        debug("get user:$user from:cache groups:" . join(",", @$groups));
+        return $groups;
     }
 
     ($err, $groups) = &{$nss{get_user_groups}}($user);
@@ -92,11 +107,7 @@ sub get_user_groups ($) {
         return;
     }
 
-    # update cache with defined or undefined uid
-    if ($ttl > 0) {
-        $group_cache{$user}{groups} = $groups;
-        $group_cache{$user}{stamp} = monotonic_time();
-    }
+    cache_put("groups", $user, $groups, $uw_config{group_cache_ttl});
     debug("get user:$user from:$nss{name} groups:" . join(",", @$groups));
     return $groups;
 }
@@ -169,36 +180,22 @@ sub nss_get_user_groups ($) {
 }
 
 #
-# user authentication caching (used by client)
+# User authentication caching (used by client).
+# Note: password is stored as MD5 hash for sake of security.
 #
 sub check_auth_cache ($$) {
     my ($user, $pass) = @_;
-
-    my $ttl = $uw_config{auth_cache_ttl};
-    return -1 if !$ttl || $ttl < 0;
-    return -2 unless exists $auth_cache{$user};
-
-    if (monotonic_time() - $auth_cache{$user}{stamp} >= $ttl) {
-        delete $auth_cache{$user};
-        return -3;
-    }
-
-    return -4 if md5_hex($pass) ne $auth_cache{$user}{pass_md5};
-
+    my $cached_md5 = cache_get("auth", $user);
+    return -1 unless defined $cached_md5;
+    return -2 if md5_hex($pass) ne $cached_md5;
     return 0;
 }
 
 sub update_auth_cache ($$$) {
     my ($user, $pass, $result) = @_;
-
-    my $ttl = $uw_config{auth_cache_ttl};
-    return -1 if !$ttl || $ttl < 0;
-    return -2 if $result ne "OK";
-
-    # store password as MD5 hash for security
-    $auth_cache{$user}{pass_md5} = md5_hex($pass);
-    $auth_cache{$user}{stamp} = monotonic_time();
-    debug("cache user auth: user:$user pass:ok");
+    return -1 if $result ne "success";
+    cache_put("auth", $user, md5_hex($pass), $uw_config{auth_cache_ttl});
+    debug("caching auth: user:$user pass:\*\*\*");
     return 0;
 }
 

@@ -47,7 +47,7 @@ sub handle_unix_request ($$) {
     if ($uw_config{debug}) {
     	my $pkt = $req;
     	# hide password from log
-    	$pkt =~ s/\s\S+$/ \*\*\*/ if $pkt =~ /%auth /;
+    	$pkt =~ s/\s\S+$/ \*\*\*/ if $pkt =~ /^auth /;
     	debug("received \"%s\" from [%s]", $pkt, $chan->{addr});
     }
 
@@ -69,7 +69,7 @@ sub handle_unix_request ($$) {
         return $#arg != 2 ? "usage: logout user sid"
                     : user_logout($arg[1], $arg[2], $chan);
     } else {
-        return "usage: echo|update|auth|login|logout|groups_only|login_only [args...] ;"
+        return "usage: echo|update|auth|login|logout [args...] ;"
               ." SIDs: tty\@rhost xdm/N net/N con/N pty/N";
     }
 }
@@ -105,6 +105,7 @@ sub handle_server_reply ($$$) {
 sub update_active ($) {
     my ($chan) = @_;
     debug("update active");
+    cache_gc();
     return "no connection" unless $srv_chan;
 
     my $opts = "";
@@ -140,7 +141,7 @@ sub user_auth ($$$) {
 
     my $req = "$user|$pass";
     if (check_auth_cache($user, $pass) == 0) {
-        info("$user: user login: OK (cached)");
+        info("$user: user auth: success (cached)");
         queue_job("auth", $req, undef);
         return "success";
     }
