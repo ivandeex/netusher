@@ -191,7 +191,7 @@ pam_mod_dir = @PAM_MODDIR@
 pam_userwatch_so_SOURCES = uw-pam.c
 pam_userwatch_so_LDFLAGS = -shared
 pam_userwatch_so_LDADD = -lpam
-pam_userwatch_so_CFLAGS = $(GLIB_CFLAGS) -D_REENTRANT -pipe @GCC_FVISIBILITY_HIDDEN@
+pam_userwatch_so_CFLAGS = $(GLIB_CFLAGS) -D_REENTRANT $(AM_CFLAGS) -pipe @GCC_FVISIBILITY_HIDDEN@
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-am
 
