@@ -19,9 +19,8 @@
 webuidir = $(pkgdatadir)/webui
 
 nobase_dist_webui_DATA = \
-		lib/userwatch.php \
-		wwwroot/index.php wwwroot/userwatch.css \
-		wwwroot/userwatch.ico wwwroot/userwatch-banner.png \
-		wwwroot/asc.png wwwroot/desc.png
-
+	lib/userwatch.php \
+	wwwroot/index.php wwwroot/userwatch.css \
+	wwwroot/userwatch.ico wwwroot/userwatch-banner.png \
+	wwwroot/asc.png wwwroot/desc.png
 

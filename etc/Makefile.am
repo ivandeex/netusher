@@ -16,7 +16,12 @@
 # 02110-1301 USA
 #
 
-EXTRA_DIST = init.d/uw-client init.d/uw-server nginx.d/userwatch.conf
+EXTRA_DIST = nginx.d/userwatch.conf
+
+initddir = $(sysconfdir)/rc.d/init.d
+
+dist_initd_SCRIPTS = \
+	init.d/uw-client init.d/uw-server
 
 nobase_dist_sysconf_DATA = \
 	userwatch/uw-client.conf-example userwatch/uw-server.conf-example \

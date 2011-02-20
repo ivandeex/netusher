@@ -19,9 +19,9 @@
 daemonsdir = $(pkgdatadir)/daemons
 
 dist_daemons_SCRIPTS = \
-		uw-client.pl uw-server.pl test.pl openvpn-event.sh-example
+	uw-client.pl uw-server.pl test.pl openvpn-event.sh-example
 
 dist_daemons_DATA = \
-		uw-common.inc.pm uw-ssl.inc.pm uw-cache.inc.pm uw-groups.inc.pm \
-		uw-ldap.inc.pm uw-vpn.inc.pm
+	uw-common.inc.pm uw-ssl.inc.pm uw-cache.inc.pm uw-groups.inc.pm \
+	uw-ldap.inc.pm uw-vpn.inc.pm
 

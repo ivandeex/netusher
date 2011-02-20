@@ -21,7 +21,7 @@ EXTRA_DIST = autogen.sh
 SUBDIRS=src daemons etc webui
 
 nobase_dist_pkgdata_DATA = \
-		install/mysql.sql
+	install/mysql.sql
 
 release: dist ./release.sh
 	./release.sh
