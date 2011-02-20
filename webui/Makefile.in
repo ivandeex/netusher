@@ -53,8 +53,8 @@ PRE_UNINSTALL = :
 POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
-subdir = etc
-DIST_COMMON = $(nobase_dist_sysconf_DATA) $(srcdir)/Makefile.am \
+subdir = webui
+DIST_COMMON = $(nobase_dist_webui_DATA) $(srcdir)/Makefile.am \
 	$(srcdir)/Makefile.in
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/configure.ac
@@ -71,9 +71,9 @@ am__vpath_adj = case $$p in \
     *) f=$$p;; \
   esac;
 am__strip_dir = `echo $$p | sed -e 's|^.*/||'`;
-am__installdirs = "$(DESTDIR)$(sysconfdir)"
-nobase_dist_sysconfDATA_INSTALL = $(install_sh_DATA)
-DATA = $(nobase_dist_sysconf_DATA)
+am__installdirs = "$(DESTDIR)$(webuidir)"
+nobase_dist_webuiDATA_INSTALL = $(install_sh_DATA)
+DATA = $(nobase_dist_webui_DATA)
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 ACLOCAL = @ACLOCAL@
 AMDEP_FALSE = @AMDEP_FALSE@
@@ -175,10 +175,12 @@ sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
 sysconfdir = @sysconfdir@
 target_alias = @target_alias@
-EXTRA_DIST = init.d/uw-client init.d/uw-server nginx.d/userwatch.conf
-nobase_dist_sysconf_DATA = \
-	userwatch/uw-client.conf-example userwatch/uw-server.conf-example \
-	userwatch/gmirror.conf-example
+webuidir = $(pkgdatadir)/webui
+nobase_dist_webui_DATA = \
+		lib/userwatch.php \
+		wwwroot/index.php wwwroot/userwatch.css \
+		wwwroot/userwatch.ico wwwroot/userwatch-banner.png \
+		wwwroot/asc.png wwwroot/desc.png
 
 all: all-am
 
@@ -192,9 +194,9 @@ $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am  $(am__configure_deps)
 	      exit 1;; \
 	  esac; \
 	done; \
-	echo ' cd $(top_srcdir) && $(AUTOMAKE) --gnu  etc/Makefile'; \
+	echo ' cd $(top_srcdir) && $(AUTOMAKE) --gnu  webui/Makefile'; \
 	cd $(top_srcdir) && \
-	  $(AUTOMAKE) --gnu  etc/Makefile
+	  $(AUTOMAKE) --gnu  webui/Makefile
 .PRECIOUS: Makefile
 Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
 	@case '$?' in \
@@ -222,24 +224,24 @@ clean-libtool:
 distclean-libtool:
 	-rm -f libtool
 uninstall-info-am:
-install-nobase_dist_sysconfDATA: $(nobase_dist_sysconf_DATA)
+install-nobase_dist_webuiDATA: $(nobase_dist_webui_DATA)
 	@$(NORMAL_INSTALL)
-	test -z "$(sysconfdir)" || $(mkdir_p) "$(DESTDIR)$(sysconfdir)"
+	test -z "$(webuidir)" || $(mkdir_p) "$(DESTDIR)$(webuidir)"
 	@$(am__vpath_adj_setup) \
-	list='$(nobase_dist_sysconf_DATA)'; for p in $$list; do \
+	list='$(nobase_dist_webui_DATA)'; for p in $$list; do \
 	  if test -f "$$p"; then d=; else d="$(srcdir)/"; fi; \
 	  $(am__vpath_adj) \
-	  echo " $(nobase_dist_sysconfDATA_INSTALL) '$$d$$p' '$(DESTDIR)$(sysconfdir)/$$f'"; \
-	  $(nobase_dist_sysconfDATA_INSTALL) "$$d$$p" "$(DESTDIR)$(sysconfdir)/$$f"; \
+	  echo " $(nobase_dist_webuiDATA_INSTALL) '$$d$$p' '$(DESTDIR)$(webuidir)/$$f'"; \
+	  $(nobase_dist_webuiDATA_INSTALL) "$$d$$p" "$(DESTDIR)$(webuidir)/$$f"; \
 	done
 
-uninstall-nobase_dist_sysconfDATA:
+uninstall-nobase_dist_webuiDATA:
 	@$(NORMAL_UNINSTALL)
 	@$(am__vpath_adj_setup) \
-	list='$(nobase_dist_sysconf_DATA)'; for p in $$list; do \
+	list='$(nobase_dist_webui_DATA)'; for p in $$list; do \
 	  $(am__vpath_adj) \
-	  echo " rm -f '$(DESTDIR)$(sysconfdir)/$$f'"; \
-	  rm -f "$(DESTDIR)$(sysconfdir)/$$f"; \
+	  echo " rm -f '$(DESTDIR)$(webuidir)/$$f'"; \
+	  rm -f "$(DESTDIR)$(webuidir)/$$f"; \
 	done
 tags: TAGS
 TAGS:
@@ -249,7 +251,7 @@ CTAGS:
 
 
 distdir: $(DISTFILES)
-	$(mkdir_p) $(distdir)/init.d $(distdir)/nginx.d $(distdir)/userwatch
+	$(mkdir_p) $(distdir)/lib $(distdir)/wwwroot
 	@srcdirstrip=`echo "$(srcdir)" | sed 's|.|.|g'`; \
 	topsrcdirstrip=`echo "$(top_srcdir)" | sed 's|.|.|g'`; \
 	list='$(DISTFILES)'; for file in $$list; do \
@@ -280,7 +282,7 @@ check-am: all-am
 check: check-am
 all-am: Makefile $(DATA)
 installdirs:
-	for dir in "$(DESTDIR)$(sysconfdir)"; do \
+	for dir in "$(DESTDIR)$(webuidir)"; do \
 	  test -z "$$dir" || $(mkdir_p) "$$dir"; \
 	done
 install: install-am
@@ -326,9 +328,9 @@ info: info-am
 
 info-am:
 
-install-data-am:
+install-data-am: install-nobase_dist_webuiDATA
 
-install-exec-am: install-nobase_dist_sysconfDATA
+install-exec-am:
 
 install-info: install-info-am
 
@@ -352,18 +354,18 @@ ps: ps-am
 
 ps-am:
 
-uninstall-am: uninstall-info-am uninstall-nobase_dist_sysconfDATA
+uninstall-am: uninstall-info-am uninstall-nobase_dist_webuiDATA
 
 .PHONY: all all-am check check-am clean clean-generic clean-libtool \
 	distclean distclean-generic distclean-libtool distdir dvi \
 	dvi-am html html-am info info-am install install-am \
 	install-data install-data-am install-exec install-exec-am \
 	install-info install-info-am install-man \
-	install-nobase_dist_sysconfDATA install-strip installcheck \
+	install-nobase_dist_webuiDATA install-strip installcheck \
 	installcheck-am installdirs maintainer-clean \
 	maintainer-clean-generic mostlyclean mostlyclean-generic \
 	mostlyclean-libtool pdf pdf-am ps ps-am uninstall uninstall-am \
-	uninstall-info-am uninstall-nobase_dist_sysconfDATA
+	uninstall-info-am uninstall-nobase_dist_webuiDATA
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

@@ -16,8 +16,10 @@
 # 02110-1301 USA
 #
 
-EXTRA_DIST = init.d/uw-client init.d/uw-server
+EXTRA_DIST = init.d/uw-client init.d/uw-server nginx.d/userwatch.conf
 
-dist_sysconf_DATA = \
-	userwatch/gmirror.conf-example userwatch/uw-client.conf-example userwatch/uw-server.conf-example
-	
+nobase_dist_sysconf_DATA = \
+	userwatch/uw-client.conf-example userwatch/uw-server.conf-example \
+	userwatch/gmirror.conf-example
+
+

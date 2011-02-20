@@ -9,7 +9,7 @@ AC_INIT([userwatch], [0.1], [vitkinet@gmail.com])
 AC_CONFIG_AUX_DIR(autoconf)
 AC_CONFIG_SRCDIR([src])
 AC_CONFIG_HEADERS([src/config.h])
-AC_CONFIG_FILES([Makefile src/Makefile daemons/Makefile etc/Makefile])
+AC_CONFIG_FILES([Makefile src/Makefile daemons/Makefile webui/Makefile etc/Makefile])
 
 AC_DEFINE([PACKAGE_COPYRIGHT], ["Copyright (c) 2011, vitki.net"],
           [Define to the project copyright requisites])

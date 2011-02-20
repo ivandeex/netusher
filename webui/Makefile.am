@@ -16,16 +16,12 @@
 # 02110-1301 USA
 #
 
-EXTRA_DIST = autogen.sh
+webuidir = $(pkgdatadir)/webui
 
-SUBDIRS=src daemons etc webui
+nobase_dist_webui_DATA = \
+		lib/userwatch.php \
+		wwwroot/index.php wwwroot/userwatch.css \
+		wwwroot/userwatch.ico wwwroot/userwatch-banner.png \
+		wwwroot/asc.png wwwroot/desc.png
 
-nobase_dist_pkgdata_DATA = \
-		install/mysql.sql
-
-release: dist ./release.sh
-	./release.sh
-
-perl-encode-setup:
-	perl -MEncode::ConfigLocal -e1 || enc2xs -C
 
