@@ -36,8 +36,20 @@ function setup () {
     return "";
 }
 
+/*
+    vpn_ip      varchar(16) NOT NULL,
+    beg_time    datetime NOT NULL,
+    end_time    datetime,
+    running     tinyint(1),
+    cname       varchar(16),
+    real_ip     varchar(16),
+    real_port   int(5),
+    rx_bytes    int(8),
+    tx_bytes    int(8),
+*/
+
 function show_hosts () {
-    echo "<h2>Hosts</h2>\n";
+    echo "<h1>Hosts</h1>\n";
     $count = 0;
     $res = mysql_query("select count(*) from uw_openvpn");
     if ($res) {
@@ -49,7 +61,7 @@ function show_hosts () {
 }
 
 function show_users () {
-    echo "<h2>Users</h2>\n";
+    echo "<h1>Users</h1>\n";
     $count = 0;
     $res = mysql_query("select count(*) from uw_users");
     if ($res) {
