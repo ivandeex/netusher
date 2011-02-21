@@ -198,7 +198,7 @@ sub update_user_mapping ($$$$) {
         next unless defined $u;
 
         my $uid = get_user_uid_grp($u->{user}, undef);
-        if (!$uid && !$uw_config{also_local}) {
+        if (!$uid && $uw_config{skip_local}) {
             debug("%s: user not found, skip", $u->{user});
             next;
         }
@@ -347,7 +347,7 @@ sub main_loop () {
                 [ qw(
                     port ca_cert peer_pem idle_timeout rw_timeout
                     syslog stdout debug stacktrace daemonize
-                    also_local prefer_nss authorize_permit
+                    prefer_nss skip_local authorize_permit
                     mysql_port
                     uid_cache_ttl group_cache_ttl
                     user_retention purge_interval

@@ -349,11 +349,12 @@ vpn_net = 192.168.0.0
 # Default: 0
 #stdout = 1
 
-# Parameter: also_local
-# Normally client and server exchange information only about LDAP users.
-# If this is set to 1 (not for production environments), local users
-# will be also negotiated. You are not supposed to use this parameter.
-# Default: 0
-#also_local = 1
+# Parameter: skip_local
+# Client and server can exchange information about all users, both
+# host-local from /etc/passwd (as seen by client or server) and from
+# such naming services as LDAP. If this parameter is 1, host-local
+# users are skipped. If it is set to 0, all users are handled.
+# Default: 1
+#skip_local = 0
 
 

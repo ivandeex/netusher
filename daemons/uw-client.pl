@@ -533,7 +533,7 @@ sub main_loop () {
                 [ qw(
                     port ca_cert peer_pem idle_timeout rw_timeout
                     syslog stdout debug stacktrace daemonize
-                    also_local prefer_nss authorize_permit
+                    prefer_nss skip_local authorize_permit
                     uid_cache_ttl group_cache_ttl
                     connect_interval update_interval auth_cache_ttl
                     enable_gmirror gmirror_conf update_nscd nscd_pid_file

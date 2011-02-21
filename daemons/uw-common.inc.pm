@@ -42,20 +42,24 @@ our %uw_config =
         etc_passwd          => "/etc/passwd",
         etc_group           => "/etc/group",
 
-        # common parameters
+        # common parameters (network)
         port                => 7501,
         peer_pem            => "$config_root/$progname.pem",
         ca_cert             => "$config_root/ca.crt",
         pid_file            => "$status_root/$progname.pid",
+        idle_timeout        => 240,
+        rw_timeout          => 10,
+
+        # common parameters (debugging)
         daemonize           => 1,
         debug               => 0,
         stacktrace          => 0,
         syslog              => 1,
         stdout              => 0,
-        idle_timeout        => 240,
-        rw_timeout          => 10,
-        also_local          => 0,
+
+        # common parameters (nss)
         prefer_nss          => 1,
+        skip_local          => 1,
         authorize_permit    => 0,
         uid_cache_ttl       => 2,
         group_cache_ttl     => 2,
@@ -448,7 +452,7 @@ sub rescan_etc () {
 
 sub is_local_user ($) {
     my ($user) = @_;
-    return !$uw_config{also_local} && exists($local_users{$user});
+    return $uw_config{skip_local} && exists($local_users{$user});
 }
 
 ##############################################
