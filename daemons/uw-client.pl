@@ -246,9 +246,12 @@ sub logon_action ($) {
             }
         }
 
-        # simple comparison
+        # console user
         if ($u->{user} eq $user && $u->{tty} eq $tty && $u->{rhost} eq $rhost) {
             $btime = $u->{btime};
+            $key = "$user|$sid|$pid";
+            $utmp_fixes{$key} = "$key|$btime";
+            debug("add fix (con): %s ==> %s", $key, $utmp_fixes{$key});
         }
 
         # /bin/su: check parent processes
