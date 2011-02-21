@@ -36,6 +36,8 @@ our %nss = (
 # If several users are active, prefer user which has logged in earlier.
 #
 
+my %login_methods;
+
 my %method_weight = (
     'top' => 9,
     'xdm' => 5,
@@ -43,7 +45,6 @@ my %method_weight = (
     'con' => 3,
     'pty' => 2,
     );
-my $min_method_weight = 4;
 
 ##############################################
 # requests
@@ -241,8 +242,9 @@ sub update_user_mapping ($$$$) {
     debug("best: user:%s method:%s sid:\"%s\" btime:%s weight:%s cmd:%s",
             $best->{user}, $best->{method}, $best->{sid},
             $best->{btime}, $best->{weight}, $cmd);
-    if ($best->{weight} < $min_method_weight) {
-        # if weight is less then allowed, remove the user from database
+
+    if (!$login_methods{$best->{method}}) {
+        # if method is not allowed, remove the user from database
         $cmd = "logout";
     }
 
@@ -348,7 +350,7 @@ sub main_loop () {
                     port ca_cert peer_pem idle_timeout rw_timeout
                     syslog stdout debug stacktrace daemonize
                     prefer_nss skip_local authorize_permit
-                    mysql_port
+                    mysql_port login_methods
                     uid_cache_ttl group_cache_ttl
                     user_retention purge_interval
                     ldap_uri ldap_bind_dn ldap_bind_pass
@@ -366,6 +368,13 @@ sub main_loop () {
     log_init();
 
     debug("setting up");
+
+    for my $method (split /\s+/, $uw_config{login_methods}) {
+        fail("$config_file: unknown login method \"$method\"")
+            unless exists $method_weight{$method};
+        $login_methods{$method} = $method_weight{$method};
+    }
+
     if (!$uw_config{prefer_nss}) {
         # switch from NSS to LDAP
         ldap_init(1);
@@ -376,6 +385,7 @@ sub main_loop () {
             user_auth           => \&ldap_auth
             );
     }
+
     mysql_connect();
     ev_create_loop();
     vpn_init();

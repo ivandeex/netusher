@@ -113,6 +113,7 @@ our %uw_config =
         # server parameters (operation)
         user_retention      => 300,
         purge_interval      => 300,
+        login_methods       => "top xdm net",
 
         # server parameters (iptables)
         iptables_user_vpn   => "",
