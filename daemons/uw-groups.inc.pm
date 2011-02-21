@@ -80,6 +80,7 @@ sub gmirror_apply ($) {
 
     # create list of active users
     for my $u (scan_utmp()) {
+        next if is_local_user($u->{user});
         if ($off_user && $u->{user} eq $off_user && $u->{sid} eq $off_sid) {
             undef $off_user;
             next;
@@ -414,29 +415,37 @@ sub scan_utmp () {
     return @$cached if defined $cached;
 
     rescan_etc();
-    my @list;
+    my @utmp;
 
     # scan utmpx
     for my $ut (sort { $a->{ut_time} <=> $b->{ut_time} } getutx()) {
         # filter out local users
-        my ($user, $tty, $rhost, $btime)
-            = @$ut{qw[ut_user ut_line ut_addr ut_time]};
+        my ($user, $tty, $rhost, $btime, $pid)
+            = @$ut{qw[ut_user ut_line ut_addr ut_time ut_pid]};
         next if $ut->{ut_type} != USER_PROCESS;
-        next if is_local_user($user);
-        if (length($rhost) == 4) {
-        	$rhost = join(".", unpack("C4", $rhost));
-        }
+
+        $rhost = $rhost ? join(".", unpack("C4", $rhost)) : "";
+        $rhost =~ y# |!@~#_#;
         $user =~ y# |!@~#_#;
         $tty =~ y# |!@~#_#;
-        $rhost =~ y# |!@~#_#;
         my $sid = $rhost ? "${tty}\@${rhost}" : $tty;
-        push @list, { user => $user, sid => $sid, btime => $btime };
-        debug("utmp next: user:$user sid:$sid time:$btime");
+
+        push @utmp, {
+            user => $user,
+            btime => $btime,
+            sid => $sid,
+            tty => $tty,
+            rhost => $rhost,
+            pid => $pid
+            };
+
+        #debug("utmp next: user:$user sid:$sid pid:$pid time:$btime");
+        #$ut->{ut_addr} = $rhost;
         #debug("utmp next: ".join(", ", map "$_=\"$ut->{$_}\"", sort keys %$ut));
     }
 
-    cache_put("host", "utmp", [ @list ], $uw_config{utmp_cache_ttl});
-    return @list;
+    cache_put("host", "utmp", [ @utmp ], $uw_config{utmp_cache_ttl});
+    return @utmp;
 }
 
 ##############################################

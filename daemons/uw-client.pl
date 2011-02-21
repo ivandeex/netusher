@@ -25,7 +25,7 @@ use IO::Handle::Record; # for peercred
 our ($config_file, $progname, %uw_config);
 our ($ev_loop, %ev_watch, $ev_reload);
 our (%local_users);
-my  ($srv_chan, $finished, @net_jobs);
+my  ($srv_chan, $finished, @net_jobs, @fix_jobs);
 my  ($reconnect_pending, $reconnect_fast);
 
 our %nss = (
@@ -152,48 +152,95 @@ sub user_auth ($$$) {
 
 sub user_login ($$$) {
     my ($user, $sid, $chan) = @_;
-
-    if (is_local_user($user)) {
-        return "local login";
-    }
+    return "local login" if is_local_user($user);
 
     # Let PAM wait only if group mirroring depends on uw-server.
     # Otherwise, perform group mirroring if needed, and let PAM continue.
     my $wait = ($uw_config{enable_gmirror} && !$uw_config{prefer_nss});
-    my $opts = $wait ? "g" : "-";
-
-    my @utmp = scan_utmp();
-    my $btime = time();
-    my $req = join("|", $user, $sid, $btime, $opts, pack_ips(), pack_utmp(@utmp));
-    my $job = make_job("login", $req, ($wait ? $chan : undef),
-                        info => "$user: login", user => $user, sid => $sid);
-    queue_net_job($job);
-
-    if ($uw_config{enable_gmirror} && !$wait) {
-        gmirror_apply($job);
-    }
-
-    return $wait ? undef : "success";
+    my $job = make_job("login", undef, $chan,
+                        user => $user, sid => $sid, can_wait => $wait);
+    my ($reply, $done) = logon_action($job);
+    queue_fix_job($job) if !$done;
+    gmirror_apply($job) if $uw_config{enable_gmirror} && !$wait;
+    return $reply;
 }
 
 sub user_logout ($$$) {
     my ($user, $sid, $chan) = @_;
-
-    if (is_local_user($user)) {
-        return "local logout";
-    }
-
-    my $req = join("|", $user, $sid, time, "", pack_ips(), pack_utmp());
-    my $job = make_job("logout", $req, undef,
-                        info => "$user: logout", user => $user, sid => $sid);
-    queue_net_job($job);
-
-    if ($uw_config{enable_gmirror}) {
-        gmirror_apply($job);
-    }
-
-    # immediately declare success so that client does not wait
+    return "local logout" if is_local_user($user);
+    my $job = make_job("logout", undef, $chan,
+                        user => $user, sid => $sid, can_wait => 0);
+    my ($reply, $done) = logon_action($job);
+    queue_fix_job($job) if !$done;
+    gmirror_apply($job) if $uw_config{enable_gmirror};
     return "success";
+}
+
+sub logon_action ($) {
+    my ($job) = @_;
+
+    # determine pid of the login process
+    if (defined($job->{chan}) && !defined($job->{pid})) {
+        if ($job->{chan}{addr} =~ /^(\d+):(\d+):(.+)$/) {
+            ($job->{euid}, $job->{pid}, $job->{prog}) = ($1, $2, $3);
+        } else {
+            ($job->{euid}, $job->{pid}, $job->{prog}) = ("", "", "");
+        }
+    }
+
+    # fix the remote host part of sid
+    my ($tty, $rhost) = split(/\@/, $job->{sid});
+    if ($rhost eq "localhost" || $rhost eq "localhost.localdomain") {
+        $rhost = "127.0.0.1";
+    } elsif ($rhost && $rhost !~ /^\d+\.\d+\.\d+\.\d+$/) {
+        my $ip = gethostbyname($rhost);
+        if ($ip) {
+            $rhost = join(".", unpack("C4", $ip));
+        } else {
+            info("$rhost: cannot determine ip");
+            return ("invalid host", 1);
+        }
+    } elsif (!$rhost) {
+        $rhost = "";
+    }
+    $job->{sid} = $rhost ? "${tty}\@${rhost}" : $tty;
+
+    # detect user login time and possibly fix tty
+    my @utmp = scan_utmp();
+    my ($user, $pid) = ($job->{user}, $job->{pid});
+    my $btime;
+    debug("utmp search: user:%s pid:%s tty:%s rhost:%s",
+            $user, $pid, $tty, $rhost);
+    for my $u (@utmp) {
+        debug("utmp try: user:%s pid:%s tty:%s rhost:%s",
+                $u->{user}, $u->{pid}, $u->{tty}, $u->{rhost});
+        if ($u->{user} eq $user && $u->{tty} eq $tty && $u->{rhost} eq $rhost) {
+            $btime = $u->{btime};
+            last;
+        }
+    }
+
+    if ($btime) {
+        # found user match in utmpx
+        my $wait = $job->{can_wait};
+        my $opts = $wait ? "g" : "-";
+        $job->{info} = sprintf("%s: %s", $user, $job->{cmd});
+        $job->{req} = join("|", $user, $job->{sid}, $btime, $opts,
+                            pack_ips(), pack_utmp(@utmp));
+        undef $job->{chan} unless $wait;
+        queue_net_job($job);
+        return ($wait ? undef : "success", 1);
+    }
+
+    # cannot find matching utmp record
+    if (++ $job->{attemps} > 2) {
+        info("%s %s: cannot find utmp record", $user, $job->{cmd});
+        return ("utmp not found", 1);
+    }
+
+    debug("postpone utmp search: user:$user tty:$tty");
+    my $wait = $job->{can_wait};
+    return ($wait ? undef : "success", 0);
 }
 
 #
@@ -220,8 +267,12 @@ sub pack_ips () {
 sub pack_utmp (@) {
     my (@utmp) = @_;
     @utmp = scan_utmp() unless @utmp;
-    my $s = join("~", map { join("!", @$_{qw[user sid btime]}) } @utmp);
-    return $s ? $s : "-";
+    my @lines;
+    for my $u (@utmp) {
+        next if is_local_user($u->{user});
+        push @lines, join("!", $u->{user}, $u->{sid}, $u->{btime});
+    }
+    return @lines ? join("~", @lines) : "-";
 }
 
 ##############################################
@@ -266,6 +317,25 @@ sub handle_net_job () {
     	debug("send request \"%s\" for [%s]", $req, $job->{source});
     }
     ssl_write_packet($srv_chan, $job->{req}, \&_srv_write_done, $job);
+}
+
+sub queue_fix_job ($) {
+    my ($job) = @_;
+    push @fix_jobs, $job;
+    $ev_watch{fix}->start() if $#fix_jobs == 0;
+}
+
+sub handle_fix_job () {
+    while ($#fix_jobs >= 0) {
+        my $job = $fix_jobs[0];
+        my ($reply, $done) = logon_action($job);
+        return if !$done;
+        if ($job->{can_wait} && $job->{chan} && defined($reply)) {
+            unix_write_reply($job->{chan}, $reply);
+        }
+        shift @fix_jobs;
+    }
+    $ev_watch{fix}->stop() if $#fix_jobs < 0;
 }
 
 ##############################################
@@ -567,6 +637,12 @@ sub main_loop () {
     reconnect();
     $ev_watch{update} = $ev_loop->timer(0, $uw_config{update_interval},
                                         sub { update_active(undef) });
+
+    my $fix_interval = $uw_config{utmp_cache_ttl};
+    $fix_interval = 0 if !$fix_interval || $fix_interval < 0;
+    $fix_interval += 1;
+    $ev_watch{fix} = $ev_loop->timer_ns($fix_interval, $fix_interval,
+                                        \&handle_fix_job);
 
     info("$progname started");
     $ev_loop->loop();
