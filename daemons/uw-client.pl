@@ -25,8 +25,9 @@ use IO::Handle::Record; # for peercred
 our ($config_file, $progname, %uw_config);
 our ($ev_loop, %ev_watch, $ev_reload);
 our (%local_users);
-my  ($srv_chan, $finished, @net_jobs, @fix_jobs, %utmp_fixes);
+my  ($srv_chan, $finished, @net_jobs);
 my  ($reconnect_pending, $reconnect_fast);
+my  ($fix_interval, $fix_attempts, @fix_jobs, %utmp_fixes);
 
 our %nss = (
             name => "nss",
@@ -256,7 +257,7 @@ sub logon_action ($) {
 
     # cannot find matching utmp record
     my $err;
-    if (!$btime && ++ $job->{attemps} > 2) {
+    if (!$btime && ++ $job->{attempt} > $fix_attempts) {
         info("$user $cmd: cannot find utmp record");
         $btime = time();
         $err = "utmp not found";
@@ -673,7 +674,7 @@ sub main_loop () {
                     port ca_cert peer_pem idle_timeout rw_timeout
                     syslog stdout debug stacktrace daemonize
                     prefer_nss skip_local authorize_permit
-                    uid_cache_ttl group_cache_ttl
+                    uid_cache_ttl group_cache_ttl login_utmp_timeout
                     connect_interval update_interval auth_cache_ttl
                     enable_gmirror gmirror_conf update_nscd nscd_pid_file
                     pam_debug
@@ -701,9 +702,10 @@ sub main_loop () {
     $ev_watch{update} = $ev_loop->timer(0, $uw_config{update_interval},
                                         sub { update_active(undef) });
 
-    my $fix_interval = $uw_config{utmp_cache_ttl};
+    $fix_interval = int($uw_config{utmp_cache_ttl});
     $fix_interval = 0 if !$fix_interval || $fix_interval < 0;
     $fix_interval += 1;
+    $fix_attempts = (int($uw_config{login_utmp_timeout}) / $fix_interval) + 1;
     $ev_watch{fix} = $ev_loop->timer_ns($fix_interval, $fix_interval,
                                         \&handle_fix_job);
 

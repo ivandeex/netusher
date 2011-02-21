@@ -102,6 +102,16 @@ server = uwserver.company.com
 #netif_cache_ttl = 180
 #utmp_cache_ttl = 2
 
+# Parameter: login_utmp_timeout
+# Client daemon waits for login process to fill in utmp records before
+# it sends data to the server. If the data is not immediately available,
+# e.g. a home directory mount is in progress, the daemon will wait until
+# the record appears. If the record does not show up within time range
+# defined by this parameter, the daemon will still inform the server
+# using defaults instead of missing data.
+# Default: 10
+#login_utmp_timeout = 20
+
 # Parameter: authorize_permit
 # Normally user authorization requests are passed to server.
 # If this parameter is 1, client will bypass server authorization

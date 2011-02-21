@@ -72,6 +72,7 @@ our %uw_config =
         auth_cache_ttl      => 0,
         netif_cache_ttl     => 180,
         utmp_cache_ttl      => 2,
+        login_utmp_timeout  => 10,
         enable_gmirror      => 0,
         gmirror_conf        => "$config_root/gmirror.conf",
         update_nscd         => 1,
