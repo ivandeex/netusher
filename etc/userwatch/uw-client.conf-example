@@ -190,4 +190,10 @@ server = uwserver.company.com
 # Default: 0
 #also_local = 1
 
+# Parameter: pam_debug
+# If this is set to 1, the UserWatch PAM module will print some debugging
+# information to syslog (authentication facility, usually /var/log/secure).
+# Default: 0
+#pam_debug = 1
+
 
