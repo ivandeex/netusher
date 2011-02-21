@@ -108,10 +108,7 @@ sub update_active ($) {
     cache_gc();
     return "no connection" unless $srv_chan;
 
-    my $opts = "";
-    if ($uw_config{enable_gmirror} && !$uw_config{prefer_nss}) {
-        $opts .= "g";
-    }
+    my $opts = $uw_config{enable_gmirror} && !$uw_config{prefer_nss} ? "g" : "-";
     my $req = join("|", $opts, pack_ips(), pack_utmp());
     queue_job("update", $req, $chan);
 
@@ -163,7 +160,7 @@ sub user_login ($$$) {
     # Otherwise, perform group mirroring if needed, and let PAM continue.
     my $wait = ($uw_config{enable_gmirror} && !$uw_config{prefer_nss});
 
-    my $opts = $wait ? "g" : "";
+    my $opts = $wait ? "g" : "-";
     my $req = join("|", $user, $sid, time, $opts, pack_ips(), pack_utmp());
     my $job = queue_job("login", $req, ($wait ? $chan : undef),
                         info => "$user: login", user => $user, sid => $sid);
