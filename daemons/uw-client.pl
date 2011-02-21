@@ -251,7 +251,8 @@ sub logon_action ($) {
             $btime = $u->{btime};
             $key = "$user|$sid|$pid";
             $utmp_fixes{$key} = "$key|$btime";
-            debug("add fix (con): %s ==> %s", $key, $utmp_fixes{$key});
+            debug("add fix (%s): %s ==> %s",
+                    $job->{prog}, $key, $utmp_fixes{$key});
         }
 
         # /bin/su: check parent processes
