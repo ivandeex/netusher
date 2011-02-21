@@ -25,7 +25,7 @@ use IO::Handle::Record; # for peercred
 our ($config_file, $progname, %uw_config);
 our ($ev_loop, %ev_watch, $ev_reload);
 our (%local_users);
-my  ($srv_chan, $finished, @net_jobs, @fix_jobs);
+my  ($srv_chan, $finished, @net_jobs, @fix_jobs, %utmp_fixes);
 my  ($reconnect_pending, $reconnect_fast);
 
 our %nss = (
@@ -106,6 +106,7 @@ sub update_active ($) {
     my ($chan) = @_;
     debug("update active");
     cache_gc();
+    remove_stale_fixes();
     return "no connection" unless $srv_chan;
 
     my $opts = $uw_config{enable_gmirror} && !$uw_config{prefer_nss} ? "g" : "-";
@@ -176,6 +177,9 @@ sub user_logout ($$$) {
     return "success";
 }
 
+#
+# fix user login sid
+#
 sub logon_action ($) {
     my ($job) = @_;
 
@@ -203,20 +207,50 @@ sub logon_action ($) {
     } elsif (!$rhost) {
         $rhost = "";
     }
-    $job->{sid} = $rhost ? "${tty}\@${rhost}" : $tty;
+    my $sid = $job->{sid} = $rhost ? "${tty}\@${rhost}" : $tty;
 
     # detect user login time and possibly fix tty
     my @utmp = scan_utmp();
-    my ($user, $pid) = ($job->{user}, $job->{pid});
-    my $btime;
+    my ($cmd, $user, $pid) = ($job->{cmd}, $job->{user}, $job->{pid});
+    my ($btime, $key);
     debug("utmp search: user:%s pid:%s tty:%s rhost:%s",
             $user, $pid, $tty, $rhost);
     for my $u (@utmp) {
         debug("utmp try: user:%s pid:%s tty:%s rhost:%s",
                 $u->{user}, $u->{pid}, $u->{tty}, $u->{rhost});
+
+        # maybe this combination is already fixed
+        $key = "$u->{user}|$u->{sid}|$u->{pid}|$u->{btime}";
+        if (exists $utmp_fixes{$key}) {
+            ($u->{user}, $u->{sid}, $u->{pid}, $u->{btime})
+                = split /\|/, $utmp_fixes{$key};
+            debug("utmp fix: user:%s pid:%s tty:%s rhost:%s cmd:%s",
+                    $u->{user}, $u->{pid}, $u->{tty}, $u->{rhost}, $cmd);
+            # remove fix if logging out
+            if ($cmd eq "logout") {
+                debug("remove fix: $key");
+                delete $utmp_fixes{$key};
+            }
+        }
+
+        # simple comparison
         if ($u->{user} eq $user && $u->{tty} eq $tty && $u->{rhost} eq $rhost) {
             $btime = $u->{btime};
             last;
+        }
+
+        # /bin/su: check parent processes
+        if ($job->{prog} eq "/bin/su" && $u->{user} eq "root"
+                && $u->{tty} eq $tty && $u->{rhost} eq $rhost) {
+            my $ppid = parent_pid($pid);
+            $ppid = parent_pid($ppid) if $ppid && $u->{pid} != $ppid;
+            if ($u->{pid} == $ppid) {
+                # found!
+                $btime = $u->{btime};
+                $utmp_fixes{$key} = "$user|$sid|$pid|$btime";
+                debug("add fix: %s ==> %s", $key, $utmp_fixes{$key});
+                last;
+            }
         }
     }
 
@@ -224,8 +258,8 @@ sub logon_action ($) {
         # found user match in utmpx
         my $wait = $job->{can_wait};
         my $opts = $wait ? "g" : "-";
-        $job->{info} = sprintf("%s: %s", $user, $job->{cmd});
-        $job->{req} = join("|", $user, $job->{sid}, $btime, $opts,
+        $job->{info} = "$user: $cmd";
+        $job->{req} = join("|", $cmd, $user, $sid, $btime, $opts,
                             pack_ips(), pack_utmp(@utmp));
         undef $job->{chan} unless $wait;
         queue_net_job($job);
@@ -234,13 +268,31 @@ sub logon_action ($) {
 
     # cannot find matching utmp record
     if (++ $job->{attemps} > 2) {
-        info("%s %s: cannot find utmp record", $user, $job->{cmd});
+        info("$user $cmd: cannot find utmp record");
         return ("utmp not found", 1);
     }
 
     debug("postpone utmp search: user:$user tty:$tty");
     my $wait = $job->{can_wait};
     return ($wait ? undef : "success", 0);
+}
+
+sub parent_pid ($) {
+    my ($pid) = @_;
+    my $line = read_file("/proc/$pid/stat");
+    return ($line =~ /^\d+ \(\S+ \S+ (\d+) \S/) ? $1 : 0;
+}
+
+sub remove_stale_fixes () {
+    my ($user, $sid, $btime, $pid1, $pid2);
+    for my $key (keys %utmp_fixes) {
+        ($user, $sid, $pid1, $btime) = split /\|/, $key;
+        ($user, $sid, $pid2, $btime) = split /\|/, $utmp_fixes{$key};
+        if (kill(0, $pid1) == 0 || kill(0, $pid2) == 0) {
+            debug("remove stale fix: $key");
+            delete $utmp_fixes{$key};
+        }
+    }
 }
 
 #
@@ -269,8 +321,13 @@ sub pack_utmp (@) {
     @utmp = scan_utmp() unless @utmp;
     my @lines;
     for my $u (@utmp) {
-        next if is_local_user($u->{user});
-        push @lines, join("!", $u->{user}, $u->{sid}, $u->{btime});
+        my ($user, $sid, $pid, $btime) = @$u{qw[user sid pid btime]};
+        my $key = "$user|$sid|$pid|$btime";
+        if (exists $utmp_fixes{$key}) {
+            ($user, $sid, $pid, $btime) = split /\|/, $utmp_fixes{$key};
+        }
+        next if is_local_user($user);
+        push @lines, join("!", $user, $sid, $btime);
     }
     return @lines ? join("~", @lines) : "-";
 }
