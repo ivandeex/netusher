@@ -213,18 +213,30 @@ sub logon_action ($) {
     # detect user login time and possibly fix tty
     my @utmp = scan_utmp();
     my ($cmd, $user, $pid) = ($job->{cmd}, $job->{user}, $job->{pid});
-    my ($btime, $key);
+    my $btime;
     debug("utmp search: user:%s pid:%s tty:%s rhost:%s",
             $user, $pid, $tty, $rhost);
+
+    my $key = "$user|$sid|$pid";
+    if (exists $utmp_fixes{$key}) {
+        ($user, $sid, $pid, $btime) = split /\|/, $utmp_fixes{$key};
+        debug("utmp fix: user:%s pid:%s sid:%s btime:%s",
+                $user, $pid, $sid, $btime);
+        if ($cmd eq "logout") {
+            debug("remove fix: $key");
+            delete $utmp_fixes{$key};
+        }
+    }
+
     for my $u (@utmp) {
+        last if $btime;
         debug("utmp try: user:%s pid:%s tty:%s rhost:%s",
                 $u->{user}, $u->{pid}, $u->{tty}, $u->{rhost});
 
         # maybe this combination is already fixed
-        $key = "$u->{user}|$u->{sid}|$u->{pid}|$u->{btime}";
+        $key = $u->{user}."|".$u->{sid}."|".$u->{pid};
         if (exists $utmp_fixes{$key}) {
-            ($u->{user}, $u->{sid}, $u->{pid}, $u->{btime})
-                = split /\|/, $utmp_fixes{$key};
+            ($u->{user}, $u->{sid}, $u->{pid}) = split /\|/, $utmp_fixes{$key};
             debug("utmp fix: user:%s pid:%s tty:%s rhost:%s cmd:%s",
                     $u->{user}, $u->{pid}, $u->{tty}, $u->{rhost}, $cmd);
             # remove fix if logging out
@@ -237,21 +249,28 @@ sub logon_action ($) {
         # simple comparison
         if ($u->{user} eq $user && $u->{tty} eq $tty && $u->{rhost} eq $rhost) {
             $btime = $u->{btime};
-            last;
         }
 
         # /bin/su: check parent processes
-        if ($job->{prog} eq "/bin/su" && $u->{user} eq "root"
+        elsif ($job->{prog} eq "/bin/su" && $u->{user} eq "root"
                 && $u->{tty} eq $tty && $u->{rhost} eq $rhost) {
             my $ppid = parent_pid($pid);
             $ppid = parent_pid($ppid) if $ppid && $u->{pid} != $ppid;
             if ($u->{pid} == $ppid) {
-                # found!
                 $btime = $u->{btime};
                 $utmp_fixes{$key} = "$user|$sid|$pid|$btime";
-                debug("add fix: %s ==> %s", $key, $utmp_fixes{$key});
-                last;
+                debug("add fix (su): %s ==> %s", $key, $utmp_fixes{$key});
             }
+        }
+
+        # ssh: wait for utmp record
+        elsif ($tty eq "ssh" && $u->{user} eq $user
+                && $u->{pid} eq $pid && $u->{rhost} eq $rhost) {
+            $btime = $u->{btime};
+            $key = "$user|$sid|$pid";
+            $sid = $u->{sid};
+            $utmp_fixes{$key} = "$user|$sid|$pid|$btime";
+            debug("add fix (ssh): %s ==> %s", $key, $utmp_fixes{$key});
         }
     }
 
@@ -259,7 +278,7 @@ sub logon_action ($) {
     my $err;
     if (!$btime && ++ $job->{attempt} > $fix_attempts) {
         info("$user $cmd: cannot find utmp record");
-        $btime = time();
+        $btime = $cmd eq "login" ? time() : "-";
         $err = "utmp not found";
     }
 
@@ -272,6 +291,7 @@ sub logon_action ($) {
                             pack_ips(), pack_utmp(@utmp));
         undef $job->{chan} unless $wait;
         queue_net_job($job);
+
         if ($err) {
             return ($err, 1);
         } else {
@@ -291,10 +311,10 @@ sub parent_pid ($) {
 }
 
 sub remove_stale_fixes () {
-    my ($user, $sid, $btime, $pid1, $pid2);
+    my ($user, $sid, $pid1, $pid2);
     for my $key (keys %utmp_fixes) {
-        ($user, $sid, $pid1, $btime) = split /\|/, $key;
-        ($user, $sid, $pid2, $btime) = split /\|/, $utmp_fixes{$key};
+        ($user, $sid, $pid1) = split /\|/, $key;
+        ($user, $sid, $pid2) = split /\|/, $utmp_fixes{$key};
         if (kill(0, $pid1) == 0 || kill(0, $pid2) == 0) {
             debug("remove stale fix: $key");
             delete $utmp_fixes{$key};
@@ -329,9 +349,9 @@ sub pack_utmp (@) {
     my @lines;
     for my $u (@utmp) {
         my ($user, $sid, $pid, $btime) = @$u{qw[user sid pid btime]};
-        my $key = "$user|$sid|$pid|$btime";
+        my $key = "$user|$sid|$pid";
         if (exists $utmp_fixes{$key}) {
-            ($user, $sid, $pid, $btime) = split /\|/, $utmp_fixes{$key};
+            ($user, $sid, $pid) = split /\|/, $utmp_fixes{$key};
         }
         next if is_local_user($user);
         push @lines, join("!", $user, $sid, $btime);

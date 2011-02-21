@@ -138,7 +138,9 @@ sub verify_login_arguments (@) {
     return $err if $err;
 
     return "invalid sid" if !$arg[2];
-    return "invalid time" if $arg[3] !~ /^\d+$/;
+    return "invalid time" if $arg[3] !~ /^(\-|\d+)$/;
+    my $btime;
+    $btime = int($arg[3]) if $arg[3] ne "-";
 
     $opts = $arg[4];
 
@@ -148,7 +150,7 @@ sub verify_login_arguments (@) {
     ($err, $utmp) = unpack_utmp($arg[6]);
     return $err if $err;
     
-    $user = { user => $arg[1], sid => $arg[2], btime => $arg[3] };
+    $user = { user => $arg[1], sid => $arg[2], btime => $btime };
     return (0, $ip, $opts, $user, $utmp);
 }
 
@@ -245,9 +247,6 @@ sub update_user_mapping ($$$$) {
     if ($cmd eq "logout" && $user) {
         debug("logout: user:%s method:%s sid:\"%s\" btime:%s vpn:$vpn_ip",
             $user->{user}, $user->{method}, $user->{sid}, $user->{btime});
-
-        # currently logout time cannot be trusted
-        undef $user->{btime};
 
         # update existing record
         mysql_execute(
