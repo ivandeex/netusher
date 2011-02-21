@@ -254,6 +254,14 @@ sub logon_action ($) {
         }
     }
 
+    # cannot find matching utmp record
+    my $err;
+    if (!$btime && ++ $job->{attemps} > 2) {
+        info("$user $cmd: cannot find utmp record");
+        $btime = time();
+        $err = "utmp not found";
+    }
+
     if ($btime) {
         # found user match in utmpx
         my $wait = $job->{can_wait};
@@ -263,13 +271,11 @@ sub logon_action ($) {
                             pack_ips(), pack_utmp(@utmp));
         undef $job->{chan} unless $wait;
         queue_net_job($job);
-        return ($wait ? undef : "success", 1);
-    }
-
-    # cannot find matching utmp record
-    if (++ $job->{attemps} > 2) {
-        info("$user $cmd: cannot find utmp record");
-        return ("utmp not found", 1);
+        if ($err) {
+            return ($err, 1);
+        } else {
+            return ($wait ? undef : "success", 1);
+        }
     }
 
     debug("postpone utmp search: user:$user tty:$tty");
