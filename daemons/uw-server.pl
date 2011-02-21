@@ -233,22 +233,41 @@ sub update_user_mapping ($$$$) {
         }
     }
 
-    if (!defined($best)) {
-        debug("ldap users not found");
-        iptables_update($vpn_ip, 1, users_from_ip($vpn_ip));
-        return;
-    }
-
-    debug("best: user:%s method:%s sid:\"%s\" btime:%s weight:%s cmd:%s",
-            $best->{user}, $best->{method}, $best->{sid},
-            $best->{btime}, $best->{weight}, $cmd);
-
-    if (!$login_methods{$best->{method}}) {
+    if ($best && !$login_methods{$best->{method}} && $cmd ne "logout") {
         # if method is not allowed, remove the user from database
+        debug("(disabled) user:%s method:%s sid:\"%s\" btime:%s cmd:%s",
+            $best->{user}, $best->{method}, $best->{sid}, $best->{btime}, $cmd);
         $cmd = "logout";
+        $user = $best;
+        undef $best;
     }
 
-    if ($cmd eq "login" || $cmd eq "logout") {
+    if ($cmd eq "logout" && $user) {
+        debug("logout: user:%s method:%s sid:\"%s\" btime:%s vpn:$vpn_ip",
+            $user->{user}, $user->{method}, $user->{sid}, $user->{btime});
+
+        # currently logout time cannot be trusted
+        undef $user->{btime};
+
+        # update existing record
+        mysql_execute(
+            "UPDATE uw_users SET end_time = NOW(), running = 0
+            WHERE username = ? AND vpn_ip = ?
+            AND ('' = ? OR sid = ?)
+            AND ('' = ? OR method = ?)
+            AND ('' = ? OR beg_time = FROM_UNIXTIME(?))",
+            $user->{user}, $vpn_ip,
+            xtrim($user->{sid}), $user->{sid},
+            xtrim($user->{method}), $user->{method},
+            xtrim($user->{btime}), $user->{btime});
+
+        mysql_commit();
+    }
+
+    if ($best) {
+        debug("login: user:%s method:%s sid:\"%s\" btime:%s cmd:%s vpn:$vpn_ip",
+            $best->{user}, $best->{method}, $best->{sid}, $best->{btime}, $cmd);
+
         # if there were previous active users, end their sessions
         mysql_execute(
             "UPDATE uw_users
@@ -266,23 +285,10 @@ sub update_user_mapping ($$$$) {
             end_time = NOW(), running = 1",
             $vpn_ip, $best->{user}, $best->{btime}, $best->{method}, $best->{sid}
             );
+
+        mysql_commit();
     }
 
-    # logout: update existing user record
-    if ($cmd eq "logout") {
-        mysql_execute(
-            "UPDATE uw_users SET end_time = NOW(), running = 0
-            WHERE username = ? AND vpn_ip = ?
-            AND ('' = ? OR sid = ?)
-            AND ('' = ? OR method = ?)
-            AND ('' = ? OR beg_time = FROM_UNIXTIME(?))",
-            $best->{user}, $vpn_ip,
-            $best->{sid}, $best->{sid},
-            $best->{method}, $best->{method},
-            $best->{btime}, $best->{btime});
-    }
-
-    mysql_commit();
     iptables_update($vpn_ip, 1, users_from_ip($vpn_ip));
 }
 

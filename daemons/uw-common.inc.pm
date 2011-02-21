@@ -557,6 +557,13 @@ sub monotonic_time () {
     return Time::HiRes::clock_gettime(&Time::HiRes::CLOCK_MONOTONIC);
 }
 
+sub xtrim ($) {
+    my ($s) = @_;
+    return "" if !defined($s) || $s eq "";
+    $s =~ s/^\s+//;  $s =~ s/\s+$//;
+    return $s;
+}
+
 ##############################################
 1;
 
