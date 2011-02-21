@@ -160,9 +160,11 @@ sub user_login ($$$) {
     # Let PAM wait only if group mirroring depends on uw-server.
     # Otherwise, perform group mirroring if needed, and let PAM continue.
     my $wait = ($uw_config{enable_gmirror} && !$uw_config{prefer_nss});
-
     my $opts = $wait ? "g" : "-";
-    my $req = join("|", $user, $sid, time, $opts, pack_ips(), pack_utmp());
+
+    my @utmp = scan_utmp();
+    my $btime = time();
+    my $req = join("|", $user, $sid, $btime, $opts, pack_ips(), pack_utmp(@utmp));
     my $job = make_job("login", $req, ($wait ? $chan : undef),
                         info => "$user: login", user => $user, sid => $sid);
     queue_net_job($job);
@@ -215,8 +217,10 @@ sub pack_ips () {
     return $ips;
 }
 
-sub pack_utmp () {
-    my $s = join("~", map { join("!", @$_{qw[user sid btime]}) } get_utmp());
+sub pack_utmp (@) {
+    my (@utmp) = @_;
+    @utmp = scan_utmp() unless @utmp;
+    my $s = join("~", map { join("!", @$_{qw[user sid btime]}) } @utmp);
     return $s ? $s : "-";
 }
 

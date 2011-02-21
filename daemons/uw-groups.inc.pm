@@ -79,7 +79,7 @@ sub gmirror_apply ($) {
     }
 
     # create list of active users
-    for my $u (get_utmp()) {
+    for my $u (scan_utmp()) {
         if ($off_user && $u->{user} eq $off_user && $u->{sid} eq $off_sid) {
             undef $off_user;
             next;
@@ -409,7 +409,7 @@ sub get_skin_name () {
 ##############################################
 # scan /var/utmpx
 #
-sub get_utmp () {
+sub scan_utmp () {
     my $cached = cache_get("host", "utmp");
     return @$cached if defined $cached;
 
