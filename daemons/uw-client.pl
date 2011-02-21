@@ -240,11 +240,11 @@ sub queue_net_job ($$$%) {
 
 sub handle_net_job () {
     if (!@net_jobs) {
-        debug("net queue empty");
+        #debug("net queue empty");
         return;
     }
     if (!$srv_chan) {
-        debug("net job postponed: no connection");
+        debug("postpone net job: no connection");
         return;
     }
     if ($srv_chan->{io_watch}) {
