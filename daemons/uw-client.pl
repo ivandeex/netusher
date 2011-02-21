@@ -110,7 +110,8 @@ sub update_active ($) {
 
     my $opts = $uw_config{enable_gmirror} && !$uw_config{prefer_nss} ? "g" : "-";
     my $req = join("|", $opts, pack_ips(), pack_utmp());
-    queue_net_job("update", $req, $chan);
+    my $job = make_job("update", $req, $chan);
+    queue_net_job($job);
 
     if ($uw_config{enable_gmirror} && $uw_config{prefer_nss}) {
         gmirror_apply(undef);
@@ -139,11 +140,11 @@ sub user_auth ($$$) {
     my $req = "$user|$pass";
     if (check_auth_cache($user, $pass) == 0) {
         info("$user: user auth: success (cached)");
-        queue_net_job("auth", $req, undef);
+        queue_net_job(make_job("auth", $req, undef));
         return "success";
     }
-    queue_net_job("auth", $req, $chan, info => "$user: auth",
-                    user => $user, pass => $pass);
+    queue_net_job(make_job("auth", $req, $chan, info => "$user: auth",
+                            user => $user, pass => $pass));
 
     # return nothing so that channel will wait for server reply
     return;
@@ -162,8 +163,9 @@ sub user_login ($$$) {
 
     my $opts = $wait ? "g" : "-";
     my $req = join("|", $user, $sid, time, $opts, pack_ips(), pack_utmp());
-    my $job = queue_net_job("login", $req, ($wait ? $chan : undef),
+    my $job = make_job("login", $req, ($wait ? $chan : undef),
                         info => "$user: login", user => $user, sid => $sid);
+    queue_net_job($job);
 
     if ($uw_config{enable_gmirror} && !$wait) {
         gmirror_apply($job);
@@ -180,8 +182,9 @@ sub user_logout ($$$) {
     }
 
     my $req = join("|", $user, $sid, time, "", pack_ips(), pack_utmp());
-    my $job = queue_net_job("logout", $req, undef,
+    my $job = make_job("logout", $req, undef,
                         info => "$user: logout", user => $user, sid => $sid);
+    queue_net_job($job);
 
     if ($uw_config{enable_gmirror}) {
         gmirror_apply($job);
@@ -230,9 +233,8 @@ sub make_job ($$$%) {
     return \%job;
 }
 
-sub queue_net_job ($$$%) {
-    my ($cmd, $req, $chan, %params) = @_;
-    my $job = make_job($cmd, $req, $chan, %params);
+sub queue_net_job ($) {
+    my ($job) = @_;
     push @net_jobs, $job;
     handle_net_job();
     return $job;
