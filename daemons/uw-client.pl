@@ -25,7 +25,7 @@ use IO::Handle::Record; # for peercred
 our ($config_file, $progname, %uw_config);
 our ($ev_loop, %ev_watch, $ev_reload);
 our (%local_users);
-my  ($srv_chan, @jobs, $finished);
+my  ($srv_chan, $finished, @net_jobs);
 my  ($reconnect_pending, $reconnect_fast);
 
 our %nss = (
@@ -110,7 +110,7 @@ sub update_active ($) {
 
     my $opts = $uw_config{enable_gmirror} && !$uw_config{prefer_nss} ? "g" : "-";
     my $req = join("|", $opts, pack_ips(), pack_utmp());
-    queue_job("update", $req, $chan);
+    queue_net_job("update", $req, $chan);
 
     if ($uw_config{enable_gmirror} && $uw_config{prefer_nss}) {
         gmirror_apply(undef);
@@ -139,11 +139,11 @@ sub user_auth ($$$) {
     my $req = "$user|$pass";
     if (check_auth_cache($user, $pass) == 0) {
         info("$user: user auth: success (cached)");
-        queue_job("auth", $req, undef);
+        queue_net_job("auth", $req, undef);
         return "success";
     }
-    queue_job("auth", $req, $chan, info => "$user: auth",
-                user => $user, pass => $pass);
+    queue_net_job("auth", $req, $chan, info => "$user: auth",
+                    user => $user, pass => $pass);
 
     # return nothing so that channel will wait for server reply
     return;
@@ -162,7 +162,7 @@ sub user_login ($$$) {
 
     my $opts = $wait ? "g" : "-";
     my $req = join("|", $user, $sid, time, $opts, pack_ips(), pack_utmp());
-    my $job = queue_job("login", $req, ($wait ? $chan : undef),
+    my $job = queue_net_job("login", $req, ($wait ? $chan : undef),
                         info => "$user: login", user => $user, sid => $sid);
 
     if ($uw_config{enable_gmirror} && !$wait) {
@@ -180,7 +180,7 @@ sub user_logout ($$$) {
     }
 
     my $req = join("|", $user, $sid, time, "", pack_ips(), pack_utmp());
-    my $job = queue_job("logout", $req, undef,
+    my $job = queue_net_job("logout", $req, undef,
                         info => "$user: logout", user => $user, sid => $sid);
 
     if ($uw_config{enable_gmirror}) {
@@ -230,29 +230,29 @@ sub make_job ($$$%) {
     return \%job;
 }
 
-sub queue_job ($$$%) {
+sub queue_net_job ($$$%) {
     my ($cmd, $req, $chan, %params) = @_;
     my $job = make_job($cmd, $req, $chan, %params);
-    push @jobs, $job;
-    handle_next_job();
+    push @net_jobs, $job;
+    handle_net_job();
     return $job;
 }
 
-sub handle_next_job () {
-    unless (@jobs) {
-        debug("job queue empty");
+sub handle_net_job () {
+    if (!@net_jobs) {
+        debug("net queue empty");
         return;
     }
-    unless ($srv_chan) {
-        debug("job postponed: no connection");
+    if (!$srv_chan) {
+        debug("net job postponed: no connection");
         return;
     }
     if ($srv_chan->{io_watch}) {
-        debug("another job running");
+        debug("another net job running");
         return;
     }
 
-    my $job = shift @jobs;
+    my $job = shift @net_jobs;
     if ($uw_config{debug}) {
     	my $req = $job->{req};
     	# hide password from log
@@ -345,7 +345,7 @@ sub on_connect ($) {
     # reconnection will start immediately after detected disconnect
     $reconnect_fast = 1;
 
-    handle_next_job();
+    handle_net_job();
 }
 
 ##############################################
@@ -357,7 +357,7 @@ sub _srv_write_done ($$$) {
 
     unless ($success) {
         debug("re-queue job from \"%s\" after failed write", $job->{source});
-        unshift @jobs, $job;
+        unshift @net_jobs, $job;
         reconnect();
         return;
     }
@@ -370,7 +370,7 @@ sub _srv_read_done ($$$) {
 
     unless (defined $reply) {
         debug("re-queue job from \"%s\" after failed read", $job->{source});
-        unshift @jobs, $job;
+        unshift @net_jobs, $job;
         reconnect();
         return;
     }
@@ -381,7 +381,7 @@ sub _srv_read_done ($$$) {
     handle_server_reply($job, $reply, $groups);
 
     undef $job;
-    handle_next_job();
+    handle_net_job();
 }
 
 ##############################################
