@@ -79,10 +79,10 @@
 #   net  -  SSH or RSH
 #   con  -  login from system console
 #   pty  -  "su" or pseudo-terminal
-# This parameter is a space-separated list of login methods that will be
+# This parameter is a comma-separated list of login methods that will be
 # recorded in the database. Other ways of login will be ignored.
-# Default: top xdm net
-#login_methods = top xdm net con pty
+# Default: top,xdm,net
+#login_methods = top,xdm,net,con,pty
 
 # Parameter: pid_file
 # Defines file where server daemon will record process id after

@@ -369,7 +369,7 @@ sub main_loop () {
 
     debug("setting up");
 
-    for my $method (split /\s+/, $uw_config{login_methods}) {
+    for my $method (split /,/, $uw_config{login_methods}) {
         fail("$config_file: unknown login method \"$method\"")
             unless exists $method_weight{$method};
         $login_methods{$method} = $method_weight{$method};
