@@ -16,7 +16,7 @@
 # 02110-1301 USA
 #
 
-EXTRA_DIST = nginx.d/userwatch.conf
+EXTRA_DIST = nginx.d/nginx-userwatch.conf httpd.d/apache-userwatch.conf
 
 initddir = $(sysconfdir)/rc.d/init.d
 

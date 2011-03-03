@@ -178,7 +178,7 @@ sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
 sysconfdir = @sysconfdir@
 target_alias = @target_alias@
-EXTRA_DIST = nginx.d/userwatch.conf
+EXTRA_DIST = nginx.d/nginx-userwatch.conf httpd.d/apache-userwatch.conf
 initddir = $(sysconfdir)/rc.d/init.d
 dist_initd_SCRIPTS = \
 	init.d/uw-client init.d/uw-server
@@ -275,7 +275,7 @@ CTAGS:
 
 
 distdir: $(DISTFILES)
-	$(mkdir_p) $(distdir)/init.d $(distdir)/nginx.d $(distdir)/userwatch
+	$(mkdir_p) $(distdir)/httpd.d $(distdir)/init.d $(distdir)/nginx.d $(distdir)/userwatch
 	@srcdirstrip=`echo "$(srcdir)" | sed 's|.|.|g'`; \
 	topsrcdirstrip=`echo "$(top_srcdir)" | sed 's|.|.|g'`; \
 	list='$(DISTFILES)'; for file in $$list; do \
