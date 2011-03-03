@@ -21,7 +21,7 @@ AUTOMAKE_OPTIONS = gnu
 noinst_PROGRAMS = pam_userwatch.so
 
 AM_CPPFLAGS = -I$(top_srcdir)
-AM_CFLAGS = -Wall -fPIC
+AM_CFLAGS = -Wall -Wno-strict-aliasing -fPIC
 
 pam_mod_dir = @PAM_MODDIR@
 

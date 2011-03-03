@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdarg.h>
 #include <errno.h>
 #include <sys/socket.h>
@@ -439,6 +440,8 @@ uw_sid (uw_state_t *uw, pam_handle_t *pamh, char *buf, int buflen)
 		len = strlen(buf);
 		buf[len] = '?';
 		strcpy(buf+len+1, rhost);
+	} else {
+		len = -1;
 	}
 
 	for (s = buf; *s; s++) {
@@ -446,7 +449,7 @@ uw_sid (uw_state_t *uw, pam_handle_t *pamh, char *buf, int buflen)
 			*s = '_';
 	}
 
-	if (*rhost)
+	if (len >= 0)
 		buf[len] = '@';
 
 	return PAM_SUCCESS;
