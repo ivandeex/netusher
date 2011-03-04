@@ -1,16 +1,16 @@
 #!/usr/bin/perl
 #
-# UserWatch
+# NetUsher
 # Client daemon
 # $Id$
 #
 
 use strict;
 use FindBin qw($Bin);
-require "$Bin/uw-common.inc.pm";
-require "$Bin/uw-ssl.inc.pm";
-require "$Bin/uw-cache.inc.pm";
-require "$Bin/uw-groups.inc.pm";
+require "$Bin/nu-common.inc.pm";
+require "$Bin/nu-ssl.inc.pm";
+require "$Bin/nu-cache.inc.pm";
+require "$Bin/nu-groups.inc.pm";
 
 use IO::Socket::UNIX;
 
@@ -22,7 +22,7 @@ use IO::Socket::UNIX;
 #
 use IO::Handle::Record; # for peercred
 
-our ($config_file, $progname, %uw_config);
+our ($config_file, $progname, %nu_config);
 our ($ev_loop, %ev_watch, $ev_reload);
 our (%local_users);
 my  ($srv_chan, $finished, @net_jobs);
@@ -45,7 +45,7 @@ sub handle_unix_request ($$) {
     my (@arg) = split(/\s+/, $req);
     my $cmd = $arg[0];
 
-    if ($uw_config{debug}) {
+    if ($nu_config{debug}) {
     	my $pkt = $req;
     	# hide password from log
     	$pkt =~ s/\s\S+$/ \*\*\*/ if $pkt =~ /^auth /;
@@ -86,7 +86,7 @@ sub handle_server_reply ($$$) {
     if ($job->{info}) {
         info($job->{info} . ": " . $reply);
     }
-    if ($groups && $uw_config{enable_gmirror} && !$uw_config{prefer_nss}) {
+    if ($groups && $nu_config{enable_gmirror} && !$nu_config{prefer_nss}) {
         if ($groups) {
             handle_groups($job, $groups);
         }
@@ -110,12 +110,12 @@ sub update_active ($) {
     remove_stale_fixes();
     return "no connection" unless $srv_chan;
 
-    my $opts = $uw_config{enable_gmirror} && !$uw_config{prefer_nss} ? "g" : "-";
+    my $opts = $nu_config{enable_gmirror} && !$nu_config{prefer_nss} ? "g" : "-";
     my $req = join("|", $opts, pack_ips(), pack_utmp());
     my $job = make_job("update", $req, $chan);
     queue_net_job($job);
 
-    if ($uw_config{enable_gmirror} && $uw_config{prefer_nss}) {
+    if ($nu_config{enable_gmirror} && $nu_config{prefer_nss}) {
         gmirror_apply(undef);
     }
 
@@ -126,11 +126,11 @@ sub update_active ($) {
 sub user_auth ($$$) {
     my ($user, $pass, $chan) = @_;
 
-    if ($uw_config{authorize_permit}) {
+    if ($nu_config{authorize_permit}) {
         return "success";
     }
 
-    if ($uw_config{prefer_nss}) {
+    if ($nu_config{prefer_nss}) {
         return "not implemented";
     }
 
@@ -156,14 +156,14 @@ sub user_login ($$$) {
     my ($user, $sid, $chan) = @_;
     return "local login" if is_local_user($user);
 
-    # Let PAM wait only if group mirroring depends on uw-server.
+    # Let PAM wait only if group mirroring depends on nu-server.
     # Otherwise, perform group mirroring if needed, and let PAM continue.
-    my $wait = ($uw_config{enable_gmirror} && !$uw_config{prefer_nss});
+    my $wait = ($nu_config{enable_gmirror} && !$nu_config{prefer_nss});
     my $job = make_job("login", undef, $chan,
                         user => $user, sid => $sid, can_wait => $wait);
     my ($reply, $done) = logon_action($job);
     queue_fix_job($job) if !$done;
-    gmirror_apply($job) if $uw_config{enable_gmirror} && !$wait;
+    gmirror_apply($job) if $nu_config{enable_gmirror} && !$wait;
     return $reply;
 }
 
@@ -174,7 +174,7 @@ sub user_logout ($$$) {
                         user => $user, sid => $sid, can_wait => 0);
     my ($reply, $done) = logon_action($job);
     queue_fix_job($job) if !$done;
-    gmirror_apply($job) if $uw_config{enable_gmirror};
+    gmirror_apply($job) if $nu_config{enable_gmirror};
     return "success";
 }
 
@@ -334,7 +334,7 @@ sub pack_ips () {
     $ips = cache_get("host", "netif");
     return $ips if defined $ips;
 
-    run_prog($uw_config{ifconfig}, \$out);
+    run_prog($nu_config{ifconfig}, \$out);
     for (split /\n/, $out) {
         next unless m"^\s+inet addr:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+\w";
         next if $1 eq "127.0.0.1";
@@ -342,7 +342,7 @@ sub pack_ips () {
     }
     $ips =~ s/,$//;
 
-    cache_put("host", "netif", $ips, $uw_config{netif_cache_ttl});
+    cache_put("host", "netif", $ips, $nu_config{netif_cache_ttl});
     debug("ip list: $ips");
     return $ips;
 }
@@ -398,7 +398,7 @@ sub handle_net_job () {
     }
 
     my $job = shift @net_jobs;
-    if ($uw_config{debug}) {
+    if ($nu_config{debug}) {
     	my $req = $job->{req};
     	# hide password from log
     	$req =~ s/\|[^\|]*$/\|\*\*\*/ if $req =~ /^auth\|/;
@@ -444,7 +444,7 @@ sub reconnect () {
     # initiate new connection to server
     delete $ev_watch{try_con};
     delete $ev_watch{wait_con};
-    my $interval = $uw_config{connect_interval};
+    my $interval = $nu_config{connect_interval};
     $ev_watch{try_con} = $ev_loop->timer(
                             ($reconnect_fast ? 0 : $interval), $interval,
                             \&connect_attempt);
@@ -456,7 +456,7 @@ sub reconnect () {
 
 sub connect_attempt () {
     debug("try to connect...");
-    my $chan = ssl_connect($uw_config{server}, $uw_config{port}, \&ev_close);
+    my $chan = ssl_connect($nu_config{server}, $nu_config{port}, \&ev_close);
     return unless $chan;
 
     delete $ev_watch{try_con};
@@ -501,7 +501,7 @@ sub on_connect ($) {
 
     info("connected to server");
     # update user list immediately
-    $ev_watch{update}->set(0, $uw_config{update_interval});
+    $ev_watch{update}->set(0, $nu_config{update_interval});
 
     # our special destructor will initiate immediate reconnection
     $chan->{destructor} = \&_srv_disconnect;
@@ -553,7 +553,7 @@ sub _srv_read_done ($$$) {
 #
 
 sub unix_listen () {
-    my $path = $uw_config{unix_socket};
+    my $path = $nu_config{unix_socket};
     create_parent_dir($path);
     unlink($path);
     my $sock = IO::Socket::UNIX->new(Type => SOCK_STREAM,
@@ -710,7 +710,7 @@ sub main_loop () {
     ev_create_loop();
 
     gmirror_init()
-        if ($uw_config{enable_gmirror} = $uw_config{enable_gmirror} ? 1 : 0);
+        if ($nu_config{enable_gmirror} = $nu_config{enable_gmirror} ? 1 : 0);
 
     if (daemonize()) {
         # clone event loop in the child
@@ -719,17 +719,17 @@ sub main_loop () {
 
     debug("post-fork setup");
     ssl_startup();
-    ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
+    ssl_create_context($nu_config{peer_pem}, $nu_config{ca_cert});
     unix_listen();
     $reconnect_fast = 1;
     reconnect();
-    $ev_watch{update} = $ev_loop->timer(0, $uw_config{update_interval},
+    $ev_watch{update} = $ev_loop->timer(0, $nu_config{update_interval},
                                         sub { update_active(undef) });
 
-    $fix_interval = int($uw_config{utmp_cache_ttl});
+    $fix_interval = int($nu_config{utmp_cache_ttl});
     $fix_interval = 0 if !$fix_interval || $fix_interval < 0;
     $fix_interval += 1;
-    $fix_attempts = (int($uw_config{login_utmp_timeout}) / $fix_interval) + 1;
+    $fix_attempts = (int($nu_config{login_utmp_timeout}) / $fix_interval) + 1;
     $ev_watch{fix} = $ev_loop->timer_ns($fix_interval, $fix_interval,
                                         \&handle_fix_job);
 

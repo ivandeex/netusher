@@ -1,9 +1,9 @@
 #!/bin/sh
-# Simple script for sending OpenVPN status changes to uw-server daemon
+# Simple script for sending OpenVPN status changes to nu-server daemon
 # $Id$
 
-PID_FILE=/var/run/userwatch/uw-server.pid
-EVENT_DIR=/var/run/userwatch
+PID_FILE=/var/run/netusher/nu-server.pid
+EVENT_DIR=/var/run/netusher
 EVENT_FILE=openvpn-event
 
 if [ -d $EVENT_DIR -a x"$RC_ACTION" != x"cron" ]; then

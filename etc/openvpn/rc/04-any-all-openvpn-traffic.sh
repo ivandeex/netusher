@@ -27,7 +27,7 @@ while read LINE; do
     fi
     [ $CNAME = $RC_CLIENT -o $RC_CLIENT = all ] || continue
 
-    SQL="INSERT INTO uw_openvpn
+    SQL="INSERT INTO nu_openvpn
         (beg_time,end_time,running,cname,
             real_ip,real_port,vpn_ip,rx_bytes,tx_bytes)
         VALUES (FROM_UNIXTIME($STARTED_UNIX),NOW(),$RUNNING,'$CNAME',

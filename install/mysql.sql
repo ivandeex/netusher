@@ -1,12 +1,12 @@
 -- $Id$
--- Create database tables for UserWatch
+-- Create database tables for NetUsher
 
-DROP DATABASE IF EXISTS userwatch;
-CREATE DATABASE userwatch DEFAULT CHARACTER SET utf8;
-USE userwatch;
+DROP DATABASE IF EXISTS netusher;
+CREATE DATABASE netusher DEFAULT CHARACTER SET utf8;
+USE netusher;
 
-DROP TABLE IF EXISTS uw_openvpn;
-CREATE TABLE uw_openvpn (
+DROP TABLE IF EXISTS nu_openvpn;
+CREATE TABLE nu_openvpn (
     vpn_ip      varchar(16) NOT NULL,
     beg_time    datetime NOT NULL,
     end_time    datetime,
@@ -19,8 +19,8 @@ CREATE TABLE uw_openvpn (
     PRIMARY KEY (vpn_ip, beg_time)
 );
 
-DROP TABLE IF EXISTS uw_users;
-CREATE TABLE uw_users (
+DROP TABLE IF EXISTS nu_users;
+CREATE TABLE nu_users (
     beg_time    datetime NOT NULL,
     end_time    datetime,
     username    varchar(24) NOT NULL,

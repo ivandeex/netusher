@@ -1,18 +1,19 @@
 #! /bin/bash
 #
-# uw-client        Start/Stop the uw-client daemon
+# nu-server        Start/Stop the nu-server daemon
 #
 # chkconfig: 2345 90 60
-# description: uw-client accepts requests from pam modules
-#              and reports user information to uw-server
-# processname: uw-client.pl
-# config: /etc/userwatch/uw-client.conf
-# pidfile: /var/run/userwatch/uw-client.pid
+# description: nu-server handles login/logout requests from nu-client
+#              daemons on client machines, manages relevant iptable chains,
+#              polls statistics from openvpn and maintains stats database.
+# processname: nu-server.pl
+# config: /etc/netusher/nu-server.conf
+# pidfile: /var/run/netusher/nu-server.pid
 
 RETVAL=0
-PROGRAM=/usr/share/userwatch/daemons/uw-client.pl
-PIDFILE=/var/run/userwatch/uw-client.pid
-prog="uw-client"
+PROGRAM=/usr/share/netusher/daemons/nu-server.pl
+PIDFILE=/var/run/netusher/nu-server.pid
+prog="nu-server"
 
 . /etc/init.d/functions
 
@@ -77,8 +78,16 @@ case "$1" in
         start
     fi
     ;;
+  iptables)
+    if [ -f $PIDFILE ]; then
+        kill -USR1 `< $PIDFILE`
+        echo "$prog refreshing iptables"
+    else
+        echo "$prog stopped"
+    fi
+    ;;
   *)
-    echo $"Usage: $0 {start|stop|status|reload|restart|condrestart}"
+    echo $"Usage: $0 {start|stop|status|reload|restart|condrestart|iptables}"
     RETVAL=3
     ;;
 esac

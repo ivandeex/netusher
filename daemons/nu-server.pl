@@ -1,24 +1,24 @@
 #!/usr/bin/perl
 #
-# UserWatch
+# NetUsher
 # Server daemon
 # $Id$
 #
 
 use strict;
 use FindBin qw($Bin);
-require "$Bin/uw-common.inc.pm";
-require "$Bin/uw-ssl.inc.pm";
-require "$Bin/uw-ldap.inc.pm";
-require "$Bin/uw-cache.inc.pm";
-require "$Bin/uw-vpn.inc.pm";
+require "$Bin/nu-common.inc.pm";
+require "$Bin/nu-ssl.inc.pm";
+require "$Bin/nu-ldap.inc.pm";
+require "$Bin/nu-cache.inc.pm";
+require "$Bin/nu-vpn.inc.pm";
 
 #
 # require: perl-EV
 #
 use EV;
 
-our ($config_file, $progname, %uw_config);
+our ($config_file, $progname, %nu_config);
 our ($ev_loop, %ev_watch, $ev_reload);
 our ($ldap_child);
 our ($vpn_regex);
@@ -82,7 +82,7 @@ sub handle_request (@) {
         $err = verify_user($arg[1]);
         return $err if $err;
 
-        return "success" if $uw_config{authorize_permit};
+        return "success" if $nu_config{authorize_permit};
 
         $err = &{$nss{user_auth}}($arg[1], $arg[2]);
     }
@@ -201,7 +201,7 @@ sub update_user_mapping ($$$$) {
         next unless defined $u;
 
         my $uid = get_user_uid_grp($u->{user}, undef);
-        if (!$uid && $uw_config{skip_local}) {
+        if (!$uid && $nu_config{skip_local}) {
             debug("%s: user not found, skip", $u->{user});
             next;
         }
@@ -250,7 +250,7 @@ sub update_user_mapping ($$$$) {
 
         # update existing record
         mysql_execute(
-            "UPDATE uw_users SET end_time = NOW(), running = 0
+            "UPDATE nu_users SET end_time = NOW(), running = 0
             WHERE username = ? AND vpn_ip = ?
             AND ('' = ? OR sid = ?)
             AND ('' = ? OR method = ?)
@@ -269,7 +269,7 @@ sub update_user_mapping ($$$$) {
 
         # if there were previous active users, end their sessions
         mysql_execute(
-            "UPDATE uw_users
+            "UPDATE nu_users
             SET end_time = FROM_UNIXTIME(?), running = 0
             WHERE vpn_ip = ? AND running = 1 AND beg_time < FROM_UNIXTIME(?)",
             $best->{btime} - 1, $vpn_ip, $best->{btime}
@@ -277,7 +277,7 @@ sub update_user_mapping ($$$$) {
 
         # insert or update existing record
         mysql_execute(
-            "INSERT INTO uw_users
+            "INSERT INTO nu_users
             (vpn_ip,username,beg_time,end_time,method,sid,running)
             VALUES (?, ?, FROM_UNIXTIME(?), NOW(), ?, ?, 1)
             ON DUPLICATE KEY UPDATE
@@ -295,9 +295,9 @@ sub purge_expired_users () {
     debug("purge expired users");
     cache_gc();
     mysql_execute(sprintf("
-        UPDATE uw_users SET running = 0
+        UPDATE nu_users SET running = 0
         WHERE running = 1 AND end_time < DATE_SUB(NOW(), INTERVAL %s SECOND)",
-        $uw_config{user_retention}));
+        $nu_config{user_retention}));
 }
 
 sub login_weight ($) {
@@ -331,7 +331,7 @@ sub detect_login_method ($) {
 sub users_from_ip ($) {
     my ($vpn_ip) = @_;
     return 0 unless $vpn_ip;
-    my $sth = mysql_execute("SELECT COUNT(*) FROM uw_users
+    my $sth = mysql_execute("SELECT COUNT(*) FROM nu_users
                             WHERE running = 1 AND vpn_ip = ?",
                             $vpn_ip);
     my $count = mysql_fetch1($sth);
@@ -374,13 +374,13 @@ sub main_loop () {
 
     debug("setting up");
 
-    for my $method (split /,/, $uw_config{login_methods}) {
+    for my $method (split /,/, $nu_config{login_methods}) {
         fail("$config_file: unknown login method \"$method\"")
             unless exists $method_weight{$method};
         $login_methods{$method} = $method_weight{$method};
     }
 
-    if (!$uw_config{prefer_nss}) {
+    if (!$nu_config{prefer_nss}) {
         # switch from NSS to LDAP
         ldap_init(1);
         %nss = (
@@ -404,14 +404,14 @@ sub main_loop () {
     }
 
     debug("post-fork setup");
-    ldap_init(0) unless $uw_config{prefer_nss};
+    ldap_init(0) unless $nu_config{prefer_nss};
     ssl_startup();
-    ssl_create_context($uw_config{peer_pem}, $uw_config{ca_cert});
+    ssl_create_context($nu_config{peer_pem}, $nu_config{ca_cert});
 
-    my $s_chan = ssl_listen($uw_config{port});
+    my $s_chan = ssl_listen($nu_config{port});
     ev_add_chan($s_chan, "s_acccept", &EV::READ, \&ssl_accept_pending);
 
-    $ev_watch{purge} = $ev_loop->timer(0, $uw_config{purge_interval},
+    $ev_watch{purge} = $ev_loop->timer(0, $nu_config{purge_interval},
                                         \&purge_expired_users);
 
     info("$progname started");
@@ -436,7 +436,7 @@ sub _ssl_read_done ($$$) {
         return;
     }
 
-    if ($uw_config{debug}) {
+    if ($nu_config{debug}) {
     	my $req = $pkt;
     	# hide password from log
     	$req =~ s/\|[^\|]*$/\|\*\*\*/ if $req =~ /^auth\|/;

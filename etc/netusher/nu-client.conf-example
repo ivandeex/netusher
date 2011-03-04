@@ -1,7 +1,7 @@
 ##############################################
-# UserWatch
-# /etc/userwatch/uw-server.conf
-# Configuration file of the uw-client daemon
+# NetUsher
+# /etc/netusher/nu-server.conf
+# Configuration file of the nu-client daemon
 # $Id$
 #
 
@@ -29,13 +29,13 @@ server = uwserver.company.com
 # All traffic between client and server is encrypted. This required
 # parameter defines location of a file in PEM format which contains
 # public SSL certificate and private key of the client.
-# Default: /etc/userwatch/uw-client.pem
+# Default: /etc/netusher/nu-client.pem
 #peer_pem = /etc/pki/my-client-cert.pem
 
 # Parameter: ca_cert
 # This required parameter should point to a X509 certificate of CA
 # used to sign client and server certificates.
-# Default: /etc/userwatch/ca.crt
+# Default: /etc/netusher/ca.crt
 #ca_cert = /etc/pki/verisign-cert.crt
 
 # Parameter: unix_socket
@@ -43,7 +43,7 @@ server = uwserver.company.com
 # accepts connections from PAM modules.
 #You are not supposed to change this.
 # Default: see below
-#unix_socket = /var/run/userwatch/uw-client.sock
+#unix_socket = /var/run/netusher/nu-client.sock
 
 # Parameters: idle_timeout, rw_timeout
 # These parameters help fighting stale client connections and hung
@@ -70,7 +70,7 @@ server = uwserver.company.com
 #update_interval = 240
 
 # Parameter: prefer_nss
-# If this parameter is zero, client will connect to UW-server for user
+# If this parameter is zero, client will connect to nu-server for user
 # and group information or to authorize users. Otherwise, the client
 # will use normal NSS.
 # Default: 1
@@ -124,7 +124,7 @@ server = uwserver.company.com
 # Defines file where server daemon will record process id after
 # going background. You are not supposed to change this parameter.
 # Default: see below
-#pid_file = /var/run/userwatch/uw-client.pid
+#pid_file = /var/run/netusher/nu-client.pid
 
 ##############################################
 # Group mirroring parameters
@@ -145,7 +145,7 @@ server = uwserver.company.com
 # Parameter: gmirror_conf
 # Defines location of the file containing group mirroring rules.
 # Default: see below
-#gmirror_conf = /etc/userwatch/gmirror.conf
+#gmirror_conf = /etc/netusher/gmirror.conf
 
 # Parameters: update_nscd
 # Client modifications of /etc/group might be not visible to NSS if the
@@ -202,7 +202,7 @@ server = uwserver.company.com
 #skip_local = 0
 
 # Parameter: pam_debug
-# If this is set to 1, the UserWatch PAM module will print some debugging
+# If this is set to 1, the NetUsher PAM module will print some debugging
 # information to syslog (authentication facility, usually /var/log/secure).
 # Default: 0
 #pam_debug = 1

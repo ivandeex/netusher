@@ -1,20 +1,20 @@
 #!/usr/bin/perl
 #
-# UserWatch
+# NetUsher
 # Interface with OpenVPN, IPtables and DNS
 # $Id$
 #
 
 use strict;
 use FindBin qw($Bin);
-require "$Bin/uw-common.inc.pm";
+require "$Bin/nu-common.inc.pm";
 
 #
 # require: perl-DBD-mysql
 #
 use DBI;
 
-our (%uw_config, $progname, %ev_watch, $ev_loop);
+our (%nu_config, $progname, %ev_watch, $ev_loop);
 
 ##############################################
 # interaction with openvpn
@@ -28,7 +28,7 @@ sub vpn_init () {
     vpn_close();
 
     # create regular expression for vpn network
-    $vpn_regex = $uw_config{vpn_net};
+    $vpn_regex = $nu_config{vpn_net};
     fail("vpn_net: invalid format \"$vpn_regex\", shall be A.B.C.0")
         if $vpn_regex !~ /^[1-9]\d{1,2}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
     $vpn_regex =~ s/(\.0+)+$//;
@@ -36,27 +36,27 @@ sub vpn_init () {
     $vpn_regex =~ s/\./\\./g;
     $vpn_regex = qr[$vpn_regex];
 
-    for my $path (@uw_config{qw[vpn_status_file vpn_event_dir vpn_archive_dir]}) {
+    for my $path (@nu_config{qw[vpn_status_file vpn_event_dir vpn_archive_dir]}) {
         fail("$path: path must be absolute") if $path && $path !~ m!^/!;
     }
 
     # by default search for events in the status file directory
-    if ($uw_config{vpn_event_mask} && !$uw_config{vpn_event_dir}
-            && $uw_config{vpn_status_file} =~ m!^/!) {
-        ($uw_config{vpn_event_dir} = $uw_config{vpn_status_file}) =~ s!/+[^/]*$!!;
+    if ($nu_config{vpn_event_mask} && !$nu_config{vpn_event_dir}
+            && $nu_config{vpn_status_file} =~ m!^/!) {
+        ($nu_config{vpn_event_dir} = $nu_config{vpn_status_file}) =~ s!/+[^/]*$!!;
     }
 
-    if ($uw_config{vpn_scan_interval}) {
+    if ($nu_config{vpn_scan_interval}) {
         #
         # setup scanner
         #
         $ev_watch{vpn_scan_timer} = $ev_loop->timer(
-                                        0, $uw_config{vpn_scan_interval},
+                                        0, $nu_config{vpn_scan_interval},
                                         \&vpn_scan);
         $ev_watch{vpn_scan_signal} = $ev_loop->signal("USR2", \&vpn_scan);
 
         # create directories
-        for my $dir (@uw_config{qw[vpn_event_dir vpn_archive_dir]}) {
+        for my $dir (@nu_config{qw[vpn_event_dir vpn_archive_dir]}) {
             create_parent_dir("$dir/dummy_file") if $dir;
         }
 
@@ -65,7 +65,7 @@ sub vpn_init () {
         #
         my $sth = mysql_execute("SELECT vpn_ip, real_ip, cname,
                                 UNIX_TIMESTAMP(beg_time)
-                                FROM uw_openvpn WHERE running = 1");
+                                FROM nu_openvpn WHERE running = 1");
         my @purge;
         while (my @row = $sth->fetchrow_array) {
             my ($vpn_ip, $real_ip, $cname, $beg_time) = @row;
@@ -85,7 +85,7 @@ sub vpn_init () {
 
         # purge stale old sessions
         for my $ip_time (@purge) {
-            mysql_execute("UPDATE uw_openvpn SET running = 0
+            mysql_execute("UPDATE nu_openvpn SET running = 0
                             WHERE beg_time = FROM_UNIXTIME(?) AND vpn_ip = ?",
                         $ip_time->[0], $ip_time->[1]);
         }
@@ -105,11 +105,11 @@ sub vpn_scan () {
     #
     # scan and read all messages
     #
-    if ($uw_config{vpn_event_dir} && $uw_config{vpn_event_mask}) {
+    if ($nu_config{vpn_event_dir} && $nu_config{vpn_event_mask}) {
         my %messages;
-        my $cfg_mask = $uw_config{vpn_cfg_mask};
-        my $path_mask = $uw_config{vpn_event_dir}."/".$uw_config{vpn_event_mask};
-        my $arch_dir = $uw_config{vpn_archive_dir};
+        my $cfg_mask = $nu_config{vpn_cfg_mask};
+        my $path_mask = $nu_config{vpn_event_dir}."/".$nu_config{vpn_event_mask};
+        my $arch_dir = $nu_config{vpn_archive_dir};
 
         # pick up all events from openvpn
         for my $path (glob $path_mask) {
@@ -206,8 +206,8 @@ sub vpn_scan () {
         if (%messages) {
             debug("handled %d vpn events", scalar(keys %messages));
             # make a short pause after event and let status file update
-            $ev_watch{vpn_scan_timer}->set($uw_config{vpn_scan_pause},
-                                            $uw_config{vpn_scan_interval});
+            $ev_watch{vpn_scan_timer}->set($nu_config{vpn_scan_pause},
+                                            $nu_config{vpn_scan_interval});
             return;
         }
     }
@@ -215,8 +215,8 @@ sub vpn_scan () {
     #
     # scan openvpn status file
     #
-    if ($uw_config{vpn_status_file}) {
-        my $path = $uw_config{vpn_status_file};
+    if ($nu_config{vpn_status_file}) {
+        my $path = $nu_config{vpn_status_file};
 
         if (open(my $file, $path)) {
             my %active;
@@ -289,7 +289,7 @@ sub vpn_connected ($%) {
             && $vpn_session{$vpn_ip}{beg_time} ne $beg_time) {
         debug("purge previous vpn session vpn:$vpn_ip ($msg)");
         mysql_execute("
-            UPDATE uw_openvpn SET running = 0, end_time = FROM_UNIXTIME(?)
+            UPDATE nu_openvpn SET running = 0, end_time = FROM_UNIXTIME(?)
             WHERE beg_time < FROM_UNIXTIME(?) AND vpn_ip = ? AND running = 1",
             $arg{beg_time} - 1, $arg{beg_time}, $arg{vpn_ip});
         delete $vpn_session{$vpn_ip};
@@ -298,7 +298,7 @@ sub vpn_connected ($%) {
     if (exists $vpn_session{$vpn_ip}) {
         # prolong existsing session
         mysql_execute("
-            UPDATE uw_openvpn SET end_time = IFNULL(FROM_UNIXTIME(?),NOW()),
+            UPDATE nu_openvpn SET end_time = IFNULL(FROM_UNIXTIME(?),NOW()),
                 running=1, cname = IFNULL(?,cname),
                 rx_bytes = IFNULL(?,rx_bytes), tx_bytes = IFNULL(?,tx_bytes)
             WHERE vpn_ip = ? AND beg_time = FROM_UNIXTIME(?)",
@@ -307,7 +307,7 @@ sub vpn_connected ($%) {
     } else {
         # create new session
         mysql_execute("
-            INSERT INTO uw_openvpn (vpn_ip,beg_time,end_time,
+            INSERT INTO nu_openvpn (vpn_ip,beg_time,end_time,
                 running,cname, real_ip,real_port,rx_bytes,tx_bytes)
             VALUES (?, FROM_UNIXTIME(?), IFNULL(FROM_UNIXTIME(?),NOW()),
                 1,?, ?,?,?,?)",
@@ -344,7 +344,7 @@ sub vpn_disconnected ($%) {
         return 0;
     }
 
-    mysql_execute("UPDATE uw_openvpn SET running = 0,
+    mysql_execute("UPDATE nu_openvpn SET running = 0,
                     end_time = IFNULL(FROM_UNIXTIME(?),end_time),
                     rx_bytes = IFNULL(?,rx_bytes),
                     tx_bytes = IFNULL(?,tx_bytes)
@@ -377,26 +377,26 @@ sub vpn_disconnected ($%) {
 #
 
 sub dyndns_init () {
-    return unless $uw_config{ns_zone_real};
+    return unless $nu_config{ns_zone_real};
     require_program("nsupdate")
 }
 
 sub dyndns_update ($$$) {
     my ($enable, $real_ip, $cname) = @_;
-    return unless $uw_config{ns_zone_real};
+    return unless $nu_config{ns_zone_real};
 
     $cname =~ s/^client-//;
-    my $host = "${cname}.$uw_config{ns_zone_real}";
+    my $host = "${cname}.$nu_config{ns_zone_real}";
 
-    my $cmd = "server $uw_config{ns_server}\n";
-    $cmd .= "zone $uw_config{ns_zone_real}\n";
+    my $cmd = "server $nu_config{ns_server}\n";
+    $cmd .= "zone $nu_config{ns_zone_real}\n";
     $cmd .= "update delete $host A\n";
-    $cmd .= "update add $host $uw_config{ns_rr_time} A $real_ip\n" if $enable;
+    $cmd .= "update add $host $nu_config{ns_rr_time} A $real_ip\n" if $enable;
     $cmd .= "send\n";
 
     my $temp = add_temp_file(undef);
     write_file($temp, $cmd);
-    run_prog("$uw_config{nsupdate} $temp");
+    run_prog("$nu_config{nsupdate} $temp");
     del_temp_file($temp);
 }
 
@@ -486,11 +486,11 @@ sub iptables_init () {
 
     # setup chain names
     $chains_all{$_} |= CHAIN_VPN | CHAIN_USER
-        for (split /\s+/, $uw_config{iptables_user_vpn});
+        for (split /\s+/, $nu_config{iptables_user_vpn});
     $chains_all{$_} |= CHAIN_REAL | CHAIN_USER
-        for (split /\s+/, $uw_config{iptables_user_real});
+        for (split /\s+/, $nu_config{iptables_user_real});
     $chains_all{$_} |= CHAIN_REAL | CHAIN_HOST
-        for (split /\s+/, $uw_config{iptables_host_real});
+        for (split /\s+/, $nu_config{iptables_host_real});
 
     $chains_enable = (%chains_all ? 1 : 0);
     return unless $chains_enable;
@@ -504,7 +504,7 @@ sub iptables_init () {
             if $chains_all{$chain};
     }
 
-    create_parent_dir($uw_config{iptables_status});
+    create_parent_dir($nu_config{iptables_status});
     iptables_rescan();
     $ev_watch{iptables} = $ev_loop->signal("USR1", \&iptables_rescan);
 }
@@ -522,7 +522,7 @@ sub iptables_rescan () {
     debug("rescan iptables");
 
     # setup structures
-    my $iptables = $uw_config{iptables};
+    my $iptables = $nu_config{iptables};
     my (%chain_exists, %chains_extra_set);
     for (keys %chains_all) {
         $chains_ips{$_} = {};
@@ -536,7 +536,7 @@ sub iptables_rescan () {
 
         # first scan saved status, then current state
         if ($source eq "status") {
-            open(my $file, $uw_config{iptables_status}) or next;
+            open(my $file, $nu_config{iptables_status}) or next;
             my $rs = $/;
             undef $/;
             $out = <$file>;
@@ -544,7 +544,7 @@ sub iptables_rescan () {
             close($file);
         }
         elsif ($source eq "iptables") {
-            my $ret = run_prog($uw_config{iptables_save}, \$out);
+            my $ret = run_prog($nu_config{iptables_save}, \$out);
         }
 
         # scan current source line by line
@@ -632,7 +632,7 @@ sub iptables_rescan () {
     # test all changes with a temporary chain
     $iptables_fail_num = 0;
     $iptables_fail_log = "";
-    my $temp = "USERWATCH_TEMP";
+    my $temp = "NETUSHER_TEMP";
 
     for my $chain (sort keys %need_update) {
         debug("begin test of chain $chain changes");
@@ -701,8 +701,8 @@ sub iptables_rescan () {
 }
 
 sub iptables_save_status () {
-    my $path = $uw_config{iptables_status};
-    my $iptables = $uw_config{iptables};
+    my $path = $nu_config{iptables_status};
+    my $iptables = $nu_config{iptables};
 
     my $out = "# generated by $progname on " . POSIX::ctime(time);
     for my $chain (sort keys %chains_all) {
@@ -727,7 +727,7 @@ sub iptables_save_status () {
 
 sub run_iptables ($$) {
     my ($cmd, $log) = @_;
-    my $iptables = $uw_config{iptables};
+    my $iptables = $nu_config{iptables};
     my $out;
     my $ret = run_prog("$iptables $cmd", \$out);
     if ($ret && $log) {
@@ -747,8 +747,8 @@ my  ($dbh, %sth_cache);
 sub mysql_connect () {
     mysql_close();
     my $uri = sprintf("DBI:mysql:%s;host=%s",
-                    $uw_config{mysql_db}, $uw_config{mysql_host});
-    $dbh = DBI->connect($uri, $uw_config{mysql_user}, $uw_config{mysql_pass})
+                    $nu_config{mysql_db}, $nu_config{mysql_host});
+    $dbh = DBI->connect($uri, $nu_config{mysql_user}, $nu_config{mysql_pass})
 		or fail("cannot connect to database");
     $dbh->{mysql_enable_utf8} = 1;
     $dbh->{mysql_auto_reconnect} = 1;
@@ -783,7 +783,7 @@ sub mysql_execute ($@) {
         info("mysql error: %s\n", $sth->errstr());
         $num = -1;
     }
-    if ($uw_config{debug} & 2) {
+    if ($nu_config{debug} & 2) {
         debug("execute: %s\n\t((%s)) = \"$num\"", $sql,
              join(',', map { defined($_) ? "\"$_\"" : "NULL" } @params));
     }

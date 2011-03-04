@@ -1,14 +1,14 @@
 #!/usr/bin/perl
 #
-# UserWatch
+# NetUsher
 # Local users and groups
 # $Id$
 #
 
 use strict;
 use FindBin qw($Bin);
-require "$Bin/uw-common.inc.pm";
-require "$Bin/uw-cache.inc.pm";
+require "$Bin/nu-common.inc.pm";
+require "$Bin/nu-cache.inc.pm";
 
 #
 # require: perl-User-Utmp
@@ -18,7 +18,7 @@ require "$Bin/uw-cache.inc.pm";
 #
 use User::Utmp qw(:constants :utmpx);
 
-our (%uw_config, $progname);
+our (%nu_config, $progname);
 our ($etc_group_str, $etc_group_sign, %local_users, %local_groups);
 
 ##############################################
@@ -94,7 +94,7 @@ sub gmirror_apply ($) {
     # apply rules
     for my $user (keys %users_set) {
         my (%lgroups, $ugroups);
-        if ($uw_config{prefer_nss}) {
+        if ($nu_config{prefer_nss}) {
             my $gmap = inquire_groups( [{ user => $user }] );
             $ugroups = $gmap->{$user};
         } else {
@@ -122,7 +122,7 @@ sub parse_gmirror_rules () {
     $rules{add} = {};
     $rules{sub} = {};
 
-    my $conf_path = $uw_config{gmirror_conf};
+    my $conf_path = $nu_config{gmirror_conf};
     open(my $conf_file, $conf_path)
         or fail("$conf_path: cannot read configuration");
     my $sum = "";
@@ -243,7 +243,7 @@ sub parse_gmirror_rules () {
         }
     }
 
-    if ($uw_config{debug}) {
+    if ($nu_config{debug}) {
         debug("local groups: ".
                 join(", ", map("$_=$lg_gid{$_}",
                     sort { $lg_gid{$a} <=> $lg_gid{$b} } keys %lg_gid)
@@ -254,7 +254,7 @@ sub parse_gmirror_rules () {
 
 sub dump_rules ($$) {
     my ($map, $msg) = @_;
-    return unless $uw_config{debug};
+    return unless $nu_config{debug};
     debug("$msg: " .
         join("; ", map { "$_:" . join(",", (sort keys %{$map->{$_}})) }
                     (sort keys %$map)));
@@ -265,7 +265,7 @@ sub dump_rules ($$) {
 #
 sub update_etc_group (;$) {
     my ($shadow) = @_;
-    my $path = $shadow ? "/etc/gshadow" : $uw_config{etc_group};
+    my $path = $shadow ? "/etc/gshadow" : $nu_config{etc_group};
 
     # /etc/gshadow is optional, update only if exists...
     if ($shadow && !(-r $path)) {
@@ -346,7 +346,7 @@ sub update_etc_group (;$) {
             }
             del_temp_file($temp_path);
             info("$path: modified successfully");
-            invalidate_nscd() if $uw_config{update_nscd};
+            invalidate_nscd() if $nu_config{update_nscd};
             last;
         }
 
@@ -361,7 +361,7 @@ sub update_etc_group (;$) {
 # invalidate nscd groups
 #
 sub invalidate_nscd () {
-    my $pid_path = $uw_config{nscd_pid_file};
+    my $pid_path = $nu_config{nscd_pid_file};
     my $pid_file;
 	unless (open($pid_file, $pid_path)) {
 		debug("$pid_path: nscd pid file not found");
@@ -444,7 +444,7 @@ sub scan_utmp () {
         #debug("utmp next: ".join(", ", map "$_=\"$ut->{$_}\"", sort keys %$ut));
     }
 
-    cache_put("host", "utmp", [ @utmp ], $uw_config{utmp_cache_ttl});
+    cache_put("host", "utmp", [ @utmp ], $nu_config{utmp_cache_ttl});
     return @utmp;
 }
 

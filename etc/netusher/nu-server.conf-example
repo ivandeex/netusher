@@ -1,7 +1,7 @@
 ##############################################
-# UserWatch
-# /etc/userwatch/uw-server.conf
-# Configuration file of the uw-server daemon
+# NetUsher
+# /etc/netusher/nu-server.conf
+# Configuration file of the nu-server daemon
 # $Id$
 #
 
@@ -18,13 +18,13 @@
 # All traffic between client and server is encrypted. This required
 # parameter defines location of a file in PEM format which contains
 # public SSL certificate and private key of the server.
-# Default: /etc/userwatch/uw-server.pem
+# Default: /etc/netusher/nu-server.pem
 #peer_pem = /etc/pki/my-server-cert.pem
 
 # Parameter: ca_cert
 # This required parameter should point to a X509 certificate of CA
 # used to sign client and server certificates.
-# Default: /etc/userwatch/ca.crt
+# Default: /etc/netusher/ca.crt
 #ca_cert = /etc/pki/verisign-cert.crt
 
 # Parameters: idle_timeout, rw_timeout
@@ -88,7 +88,7 @@
 # Defines file where server daemon will record process id after
 # going background. You are not supposed to change this parameter.
 # Default: see below
-#pid_file = /var/run/userwatch/uw-server.pid
+#pid_file = /var/run/netusher/nu-server.pid
 
 ##############################################
 # Database parameters
@@ -113,7 +113,7 @@ mysql_pass = secret
 # Parameter: mysql_db
 # MySQL database name.
 # Default: none, required
-mysql_db = userwatch
+mysql_db = netusher
 
 ##############################################
 # OpenVPN parameters
@@ -130,7 +130,7 @@ vpn_net = 192.168.0.0
 
 # Parameter: vpn_scan_interval 
 # You can configure OpenVPN daemon to periodically dump network status
-# to a file. If this parameter is positive, uw-server will poll this
+# to a file. If this parameter is positive, nu-server will poll this
 # file and gather vpn host status and exchange statistics.
 # Setting this to 0 disables polling.
 # Please note that OpenVPN status format should be set to 2.
@@ -150,11 +150,11 @@ vpn_net = 192.168.0.0
 # script. The script will be run by OpenVPN when network changes state,
 # produce a small temporary file describing the event, put it in a given
 # directory (if you don't like the default, edit the script to your taste)
-# and send SIGUSR2 to the uw-server daemon. Upon catching the signal or
+# and send SIGUSR2 to the nu-server daemon. Upon catching the signal or
 # during the next poll period the daemon will find the file, read and
 # immediately remove it, and update VPN statistics in the database.
 # Default: see below
-#vpn_event_dir = /var/run/userwatch
+#vpn_event_dir = /var/run/netusher
 
 # Parameter: vpn_event_mask
 # This parameter defines how temporary event files are named. If you
@@ -168,7 +168,7 @@ vpn_net = 192.168.0.0
 # a new host has connected to the network, it's VPN address can be undefined
 # during a short period of time, while connection parameters are negotiated.
 # During this period the OpenVPN status file is in transitional state
-# leading to spurious connect/disconnect events reported by uw-server.
+# leading to spurious connect/disconnect events reported by nu-server.
 # As a workaround, this parameter disables status polling for a given number
 # of seconds after each state change.
 # Default: 3 seconds
@@ -219,12 +219,12 @@ vpn_net = 192.168.0.0
 # parameter after every state change. Reloading IPtables can flush
 # controlled tables, and this file can be used to recover the last state
 # by simply running it:
-# $ sh /var/run/userwatch/uw-server.iptables
+# $ sh /var/run/netusher/nu-server.iptables
 # Another way to restore tables is to send SIGUSR1 to the daemon.
 # The rc script provides a friendly wrapper for this method:
-# $ /etc/init.d/uw-server iptables
+# $ /etc/init.d/nu-server iptables
 # Default: see below
-#iptables_status = /var/run/userwatch/uw-server.iptables
+#iptables_status = /var/run/netusher/nu-server.iptables
 
 ##############################################
 # Dynamic DNS parameters
@@ -316,7 +316,7 @@ vpn_net = 192.168.0.0
 #debug = 1
 
 # Parameter: ldap_force_fork
-# Client and server UserWatch daemons interact over a secure SSL connection.
+# Client and server NetUsher daemons interact over a secure SSL connection.
 # The server also can connect to OpenLDAP for user authentication or for
 # credential queries, and this connection can also be secure (if LDAPS or
 # StartTLS is used). The Perl Net::LDAP implementation will the use the

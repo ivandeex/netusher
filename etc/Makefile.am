@@ -16,15 +16,15 @@
 # 02110-1301 USA
 #
 
-EXTRA_DIST = nginx.d/nginx-userwatch.conf httpd.d/apache-userwatch.conf
+EXTRA_DIST = nginx.d/nginx-netusher.conf httpd.d/apache-netusher.conf
 
 initddir = $(sysconfdir)/rc.d/init.d
 
 dist_initd_SCRIPTS = \
-	init.d/uw-client init.d/uw-server
+	init.d/nu-client init.d/nu-server
 
 nobase_dist_sysconf_DATA = \
-	userwatch/uw-client.conf-example userwatch/uw-server.conf-example \
-	userwatch/gmirror.conf-example
+	netusher/nu-client.conf-example netusher/nu-server.conf-example \
+	netusher/gmirror.conf-example
 
 

@@ -1,6 +1,24 @@
-UserWatch allows users to "roam" between computers on local net
+Accounting and access control for "roaming" Unix domain users.
+NetUsher allows users to "roam" between computers on local net
 while still accountable by AAA systems like Radius or NetAMS.
 
-The project page is located at http://vitki.net/v/projects/userwatch
+Current features
 
-Send your bug reports, questions and comments to <vitkinet@gmail.com>
+- PAM integration
+- Get traffic counters from OpenVPN
+- Detecting user login methods (GDM/KDM/XDM, RSH/SSH, console, X terminal)
+- Detecting non-LDAP users
+- Authorizing users through LDAP
+- MySQL support
+- IPtable modification
+- Web UI
+- Group mirroring
+
+Planned features
+
+- Integration with NeTAMS
+- Get traffic counters from IPtables
+- Use SAWstats as a graphing frontend (SAWstats will take host-to-user mappings from UserWatch)
+- More than one logged in user per host and automatic determining of traffic shares
+- Rewrite uwclient and uwserver in pure C. This will remove dependency on buggy Net::SSLeay
+  (eg. due to bugs in Net::SSLeay we cannot have our own SSL connections and LDAPS simultaneously)

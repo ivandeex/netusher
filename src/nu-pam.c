@@ -18,7 +18,7 @@
 
   $Id$
 
-  UserWatch PAM module.
+  NetUsher PAM module.
 
 */
 
@@ -46,17 +46,17 @@
 #define EXPORT_SYMBOL
 #endif
 
-#define UW_DEBUG	1
-#define UW_ERROR	0
+#define NU_DEBUG	1
+#define NU_ERROR	0
 
-#define UW_CONFIG_FILE 	"/etc/userwatch/uw-client.conf"
-#define UW_SOCKET_PATH	"/var/run/userwatch/uw-client.sock"
-#define UW_DATA_NAME	"pam_userwatch_data"
-#define UW_MAGIC		0x5A61C
-#define UW_CFG_LINE_MAX	256
-#define UW_SOCK_BUF_MAX	128
+#define NU_CONFIG_FILE 	"/etc/netusher/nu-client.conf"
+#define NU_SOCKET_PATH	"/var/run/netusher/nu-client.sock"
+#define NU_DATA_NAME	"pam_netusher_data"
+#define NU_MAGIC		0x5A61C
+#define NU_CFG_LINE_MAX	256
+#define NU_SOCK_BUF_MAX	128
 
-static void uw_cleanup (pam_handle_t *, void *, int);
+static void nu_cleanup (pam_handle_t *, void *, int);
 
 typedef struct {
 	int			magic;
@@ -67,14 +67,14 @@ typedef struct {
 	const char *service;
 	const char *func;
 	const char *user;
-} uw_state_t;
+} nu_state_t;
 
 
 /*
 	Logging
 */
 static void
-uw_log(const uw_state_t *uw, int is_debug, const char *fmt, ...)
+nu_log(const nu_state_t *nu, int is_debug, const char *fmt, ...)
 {
 	char *format;
 	va_list ap;
@@ -83,17 +83,17 @@ uw_log(const uw_state_t *uw, int is_debug, const char *fmt, ...)
 	const char *service;
 	const char *user;
 
-	if (is_debug && uw && !uw->debug)
+	if (is_debug && nu && !nu->debug)
 		return;
 
-	func = uw && uw->func ? uw->func : "";
-	service = uw && uw->service ? uw->service : "";
-	user = uw && uw->user ? uw->user : "";
+	func = nu && nu->func ? nu->func : "";
+	service = nu && nu->service ? nu->service : "";
+	user = nu && nu->user ? nu->user : "";
 	sprintf(pid, "%u", (int)getpid());
 
 	format = malloc(strlen(fmt) + strlen(service) + strlen(func)
 					+ strlen(user) + strlen(pid) + 32);
-	strcpy(format, "pam_userwatch(");
+	strcpy(format, "pam_netusher(");
 	strcat(format, service);
 	strcat(format, "/");
 	strcat(format, func);
@@ -116,10 +116,10 @@ uw_log(const uw_state_t *uw, int is_debug, const char *fmt, ...)
 	Parse config file and get unix socket path
 */
 static void
-uw_parse_config (uw_state_t *uw, const char *config_path)
+nu_parse_config (nu_state_t *nu, const char *config_path)
 {
 	FILE *file;
-	char line[UW_CFG_LINE_MAX];
+	char line[NU_CFG_LINE_MAX];
 	char c;
 	char *p, *param, *value;
 	int  intval;
@@ -154,18 +154,18 @@ uw_parse_config (uw_state_t *uw, const char *config_path)
 		while(isspace(*p)) p++;
 
 		value = p;
-		/* uw_log(uw, UW_DEBUG, "config: %s=%s", param, value); */
+		/* nu_log(nu, NU_DEBUG, "config: %s=%s", param, value); */
 
 		if (!strcmp(param, "unix_socket")) {
-			if (uw->socket_path)
-				free(uw->socket_path);
-			uw->socket_path = strdup(value);
+			if (nu->socket_path)
+				free(nu->socket_path);
+			nu->socket_path = strdup(value);
 		}
 
 		if (!strcmp(param, "pam_debug")) {
 			intval = atoi(value);
 			if (intval)
-				uw->debug = 1;
+				nu->debug = 1;
 		}
 	}
 
@@ -179,77 +179,77 @@ uw_parse_config (uw_state_t *uw, const char *config_path)
 		- get user name and pam initiator name
 		- get unix socket path
 */
-static uw_state_t *
-uw_prepare (const char *func, pam_handle_t *pamh,
+static nu_state_t *
+nu_prepare (const char *func, pam_handle_t *pamh,
 			int flags, int argc, const char **argv)
 {
-	uw_state_t *uw = NULL;
+	nu_state_t *nu = NULL;
 	int i, ret;
 
 	/* Initialize instance descriptor */
 	
-	ret = pam_get_data(pamh, UW_DATA_NAME, (const void **) &uw);
-	if (ret != PAM_SUCCESS || uw == NULL) {
-		uw = malloc(sizeof(*uw));
-		uw->magic = 0;
+	ret = pam_get_data(pamh, NU_DATA_NAME, (const void **) &nu);
+	if (ret != PAM_SUCCESS || nu == NULL) {
+		nu = malloc(sizeof(*nu));
+		nu->magic = 0;
 	}
-	if (uw->magic != UW_MAGIC) {
-		memset(uw, 0, sizeof(*uw));
-		uw->magic = UW_MAGIC;
-		uw->sock = -1;
-		ret = pam_set_data(pamh, UW_DATA_NAME, uw, uw_cleanup);
+	if (nu->magic != NU_MAGIC) {
+		memset(nu, 0, sizeof(*nu));
+		nu->magic = NU_MAGIC;
+		nu->sock = -1;
+		ret = pam_set_data(pamh, NU_DATA_NAME, nu, nu_cleanup);
 	}
 
-	uw->func = func;
+	nu->func = func;
 
 	for (i = 0; i < argc; i++) {
 		if (argv[i] && !strcmp(argv[i], "debug")) {
-			uw->debug = 1;
+			nu->debug = 1;
 		}
 		else if (argv[i] && !strcmp(argv[i], "useauthtok")) {
-			uw->use_auth_tok = 1;
+			nu->use_auth_tok = 1;
 		}
-		uw_log(uw, UW_DEBUG, "option: %s", argv[i] ? argv[i] : "NULL");
+		nu_log(nu, NU_DEBUG, "option: %s", argv[i] ? argv[i] : "NULL");
 	}
 
 	/* Read core information: USER, SERVICE, TTY, RHOST */
 
-	ret = pam_get_user(pamh, &uw->user, NULL);
+	ret = pam_get_user(pamh, &nu->user, NULL);
 	if (ret != PAM_SUCCESS) {
-		uw_log(uw, UW_ERROR, "cannot get user");
-		uw->user = NULL;
+		nu_log(nu, NU_ERROR, "cannot get user");
+		nu->user = NULL;
 	}
 
-	ret = pam_get_item(pamh, PAM_SERVICE, (const void **) &uw->service);
+	ret = pam_get_item(pamh, PAM_SERVICE, (const void **) &nu->service);
 	if (ret != PAM_SUCCESS) {
-		uw_log(uw, UW_ERROR, "cannot get service");
-		uw->service = NULL;
+		nu_log(nu, NU_ERROR, "cannot get service");
+		nu->service = NULL;
 	}
 
 	/* Read configuration file */
 
-	if (uw->socket_path == NULL) {
-		uw_parse_config(uw, UW_CONFIG_FILE);
-		if (uw->socket_path == NULL)
-			uw->socket_path = strdup(UW_SOCKET_PATH);
-		uw_log(uw, UW_DEBUG, "socket_path:%s", uw->socket_path);
+	if (nu->socket_path == NULL) {
+		nu_parse_config(nu, NU_CONFIG_FILE);
+		if (nu->socket_path == NULL)
+			nu->socket_path = strdup(NU_SOCKET_PATH);
+		nu_log(nu, NU_DEBUG, "socket_path:%s", nu->socket_path);
 	}
 
-	return uw;
+	return nu;
 }
 
 
 /*
-	Disconnect from uw-client
+	Disconnect from nu-client
 */
 static void
-uw_disconnect (uw_state_t *uw)
+nu_disconnect (nu_state_t *nu)
 {
-	if (uw->sock >= 0) {
-		uw_log(uw, UW_DEBUG, "disconnected");
-		shutdown(uw->sock, SHUT_RDWR);
-		close(uw->sock);
-		uw->sock = -1;
+	if (nu->sock >= 0) {
+		nu_log(nu, NU_DEBUG, "disconnected");
+		shutdown(nu->sock, SHUT_RDWR);
+		close(nu->sock);
+		nu->sock = -1;
 	}
 }
 
@@ -258,65 +258,65 @@ uw_disconnect (uw_state_t *uw)
 	Cleanup
 */
 static void
-uw_cleanup (pam_handle_t *pamh, void *data, int error_status)
+nu_cleanup (pam_handle_t *pamh, void *data, int error_status)
 {
-	uw_state_t *uw = data;
+	nu_state_t *nu = data;
 
-	if (uw && uw->magic == UW_MAGIC) {
-		uw_disconnect(uw);
-		if (uw->socket_path) {
-			free(uw->socket_path);
+	if (nu && nu->magic == NU_MAGIC) {
+		nu_disconnect(nu);
+		if (nu->socket_path) {
+			free(nu->socket_path);
 		}
-		memset(uw, 0, sizeof(*uw));
+		memset(nu, 0, sizeof(*nu));
 	}
 }
 
 
 /*
-	Connect to uw-client
+	Connect to nu-client
 */
 static int
-uw_connect (uw_state_t *uw)
+nu_connect (nu_state_t *nu)
 {
 	struct sockaddr_un *paddr;
 	int len, sock, ret;
 
 	sock = socket(PF_UNIX, SOCK_STREAM, 0);
 	if (sock < 0) {
-		uw_log(uw, UW_ERROR, "cannot create unix socket: %s", strerror(errno));
+		nu_log(nu, NU_ERROR, "cannot create unix socket: %s", strerror(errno));
 		return PAM_SYSTEM_ERR;
 	}
 
-	len = sizeof(paddr->sun_family) + strlen(uw->socket_path);
+	len = sizeof(paddr->sun_family) + strlen(nu->socket_path);
 	paddr = (void *) malloc(len + 1);
 	paddr->sun_family = AF_UNIX;
-	strcpy(paddr->sun_path, uw->socket_path);
+	strcpy(paddr->sun_path, nu->socket_path);
 
 	ret = connect(sock, (struct sockaddr *) paddr, len);
 	free(paddr);
 	if (ret < 0) {
-		uw_log(uw, UW_ERROR, "cannot connect unix socket: %s", strerror(errno));
+		nu_log(nu, NU_ERROR, "cannot connect unix socket: %s", strerror(errno));
 		close(sock);
 		return PAM_SYSTEM_ERR;
 	}
 
-	uw->sock = sock;
-	uw_log(uw, UW_DEBUG, "connected to uw-client", strerror(errno));
+	nu->sock = sock;
+	nu_log(nu, NU_DEBUG, "connected to nu-client", strerror(errno));
 	return PAM_SUCCESS;
 }
 
 /*
-	Send command to uw-client
+	Send command to nu-client
 */
 static int
-uw_send (uw_state_t *uw, const char *fmt, ...)
+nu_send (nu_state_t *nu, const char *fmt, ...)
 {
 	int ret, len, bytes, off;
-	char buf[UW_SOCK_BUF_MAX];
+	char buf[NU_SOCK_BUF_MAX];
 	va_list ap;
 
-	if (uw->sock < 0) {
-		ret = uw_connect(uw);
+	if (nu->sock < 0) {
+		ret = nu_connect(nu);
 		if (ret != PAM_SUCCESS)
 			return ret;
 	}
@@ -326,7 +326,7 @@ uw_send (uw_state_t *uw, const char *fmt, ...)
 	va_end(ap);
 
 	if (len >= sizeof(buf)-2) {
-		uw_log(uw, UW_ERROR, "request buffer exhausted");
+		nu_log(nu, NU_ERROR, "request buffer exhausted");
 		memset(buf, 0, sizeof(buf));
 		return PAM_SYSTEM_ERR;
 	}
@@ -336,13 +336,13 @@ uw_send (uw_state_t *uw, const char *fmt, ...)
 	off = 0;
 
 	while (len > 0) {
-		bytes = send(uw->sock, buf+off, len, MSG_NOSIGNAL);
+		bytes = send(nu->sock, buf+off, len, MSG_NOSIGNAL);
 		if (bytes <= 0) {
 			if (errno == EINTR)
 				continue;
-			uw_log(uw, UW_ERROR, "send error: %s", strerror(errno));
-			close(uw->sock);
-			uw->sock = -1;
+			nu_log(nu, NU_ERROR, "send error: %s", strerror(errno));
+			close(nu->sock);
+			nu->sock = -1;
 			memset(buf, 0, sizeof(buf));
 			return PAM_SYSTEM_ERR;
 		}
@@ -355,13 +355,13 @@ uw_send (uw_state_t *uw, const char *fmt, ...)
 }
 
 static int
-uw_receive (uw_state_t *uw, char *buf, int buflen)
+nu_receive (nu_state_t *nu, char *buf, int buflen)
 {
 	int off, len, bytes;
 	char *p;
 
 	*buf = '\0';
-	if (uw->sock < 0)
+	if (nu->sock < 0)
 		return PAM_SYSTEM_ERR;
 
 	off = 0;
@@ -369,16 +369,16 @@ uw_receive (uw_state_t *uw, char *buf, int buflen)
 	while (1) {
 		len = buflen - off - 1;
 		if (len <= 0) {
-			uw_log(uw, UW_ERROR, "reply buffer exhausted");
+			nu_log(nu, NU_ERROR, "reply buffer exhausted");
 			return PAM_SYSTEM_ERR;
 		}
-		bytes = recv(uw->sock, buf+off, len, 0);
+		bytes = recv(nu->sock, buf+off, len, 0);
 		if (bytes <= 0) {
 			if (errno == EINTR)
 				continue;
-			uw_log(uw, UW_ERROR, "receive error: %s", strerror(errno));
-			close(uw->sock);
-			uw->sock = -1;
+			nu_log(nu, NU_ERROR, "receive error: %s", strerror(errno));
+			close(nu->sock);
+			nu->sock = -1;
 			return PAM_SYSTEM_ERR;
 		}
 		off += bytes;
@@ -394,7 +394,7 @@ uw_receive (uw_state_t *uw, char *buf, int buflen)
 }
 
 static int
-uw_decode_reply (const char *buf)
+nu_decode_reply (const char *buf)
 {
 	if (!strcmp(buf, "success"))
 		return PAM_SUCCESS;
@@ -411,7 +411,7 @@ uw_decode_reply (const char *buf)
 
 
 static int
-uw_sid (uw_state_t *uw, pam_handle_t *pamh, char *buf, int buflen)
+nu_sid (nu_state_t *nu, pam_handle_t *pamh, char *buf, int buflen)
 {
 	const char *tty;
 	const char *rhost;
@@ -428,7 +428,7 @@ uw_sid (uw_state_t *uw, pam_handle_t *pamh, char *buf, int buflen)
 
 	if (strlen(tty) + strlen(rhost) > buflen-2) {
 		*buf = '\0';
-		uw_log(uw, UW_ERROR, "sid buffer exhausted");
+		nu_log(nu, NU_ERROR, "sid buffer exhausted");
 		return PAM_SYSTEM_ERR;
 	}
 
@@ -464,16 +464,16 @@ uw_sid (uw_state_t *uw, pam_handle_t *pamh, char *buf, int buflen)
 PAM_EXTERN EXPORT_SYMBOL int
 pam_sm_open_session (pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	uw_state_t *uw = uw_prepare("session", pamh, flags, argc, argv);
-	char buf[UW_SOCK_BUF_MAX];
+	nu_state_t *nu = nu_prepare("session", pamh, flags, argc, argv);
+	char buf[NU_SOCK_BUF_MAX];
 
-	uw_sid(uw, pamh, buf, sizeof(buf));
-	if (uw_send(uw, "login %s %s", uw->user, buf) == PAM_SUCCESS) {
-		/* Wait until uw-client finishes group mirroring */
-		uw_receive(uw, buf, sizeof(buf));
+	nu_sid(nu, pamh, buf, sizeof(buf));
+	if (nu_send(nu, "login %s %s", nu->user, buf) == PAM_SUCCESS) {
+		/* Wait until nu-client finishes group mirroring */
+		nu_receive(nu, buf, sizeof(buf));
 	}
 	memset(buf, 0, sizeof(buf));
-	uw_disconnect(uw);
+	nu_disconnect(nu);
 
 	/* Always success */
 	return PAM_SUCCESS;
@@ -488,16 +488,16 @@ PAM_EXTERN EXPORT_SYMBOL
 int
 pam_sm_close_session (pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	uw_state_t *uw = uw_prepare("session", pamh, flags, argc, argv);
-	char buf[UW_SOCK_BUF_MAX];
+	nu_state_t *nu = nu_prepare("session", pamh, flags, argc, argv);
+	char buf[NU_SOCK_BUF_MAX];
 
-	uw_sid(uw, pamh, buf, sizeof(buf));
-	if (uw_send(uw, "logout %s %s", uw->user, buf) == PAM_SUCCESS) {
-		/* Exit without waiting for uw-client. */
-		/*uw_receive(uw, buf, sizeof(buf));*/
+	nu_sid(nu, pamh, buf, sizeof(buf));
+	if (nu_send(nu, "logout %s %s", nu->user, buf) == PAM_SUCCESS) {
+		/* Exit without waiting for nu-client. */
+		/*nu_receive(nu, buf, sizeof(buf));*/
 	}
 	memset(buf, 0, sizeof(buf));
-	uw_disconnect(uw);
+	nu_disconnect(nu);
 
 	/* Always success */
 	return PAM_SUCCESS;
@@ -512,38 +512,38 @@ PAM_EXTERN EXPORT_SYMBOL
 int
 pam_sm_authenticate (pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	uw_state_t *uw = uw_prepare("auth", pamh, flags, argc, argv);
+	nu_state_t *nu = nu_prepare("auth", pamh, flags, argc, argv);
 	const char *pass;
-	char buf[UW_SOCK_BUF_MAX];
+	char buf[NU_SOCK_BUF_MAX];
 	int ret;
 
-	uw_log(uw, UW_DEBUG, "authenticate user \"%s\"", uw->user);
+	nu_log(nu, NU_DEBUG, "authenticate user \"%s\"", nu->user);
 
-	if (uw->user == NULL || *(uw->user) == '\0') {
-		uw_log(uw, UW_DEBUG, "no user");
+	if (nu->user == NULL || *(nu->user) == '\0') {
+		nu_log(nu, NU_DEBUG, "no user");
 		return PAM_AUTH_ERR;
 	}
 
 	ret = pam_get_item(pamh, PAM_AUTHTOK, (const void **) &pass);
 	if (ret != PAM_SUCCESS || pass == NULL || *pass == '\0') {
-		uw_log(uw, UW_DEBUG, "no password (%d)", ret);
+		nu_log(nu, NU_DEBUG, "no password (%d)", ret);
 		return PAM_AUTH_ERR;
 	}
 
-	ret = uw_send(uw, "auth %s %s", uw->user, pass);
+	ret = nu_send(nu, "auth %s %s", nu->user, pass);
 	if (ret == PAM_SUCCESS) {
-		ret = uw_receive(uw, buf, sizeof(buf));
+		ret = nu_receive(nu, buf, sizeof(buf));
 		if (ret == PAM_SUCCESS) {
-			ret = uw_decode_reply(buf);
-			uw_log(uw, UW_DEBUG,
+			ret = nu_decode_reply(buf);
+			nu_log(nu, NU_DEBUG,
 					"got auth for user \"%s\" reply:\"%s\" (%d)",
-					uw->user, buf, ret);
+					nu->user, buf, ret);
 		}
 	}
 	memset(buf, 0, sizeof(buf));
-	uw_disconnect(uw);
+	nu_disconnect(nu);
 	if (ret)
-		uw_log(uw, UW_DEBUG, "auth error %d", ret);
+		nu_log(nu, NU_DEBUG, "auth error %d", ret);
 
 	return ret;
 }
@@ -587,8 +587,8 @@ pam_sm_acct_mgmt (pam_handle_t *pamh, int flags, int argc, const char **argv)
 
 #ifdef PAM_STATIC
 /* static module data */
-EXPORT_SYMBOL struct pam_module _pam_uwatch_modstruct = {
-	.name					= "pam_uwatch",
+EXPORT_SYMBOL struct pam_module _pam_netusher_modstruct = {
+	.name					= "pam_netusher",
 	.pam_sm_authenticate	= pam_sm_authenticate,
 	.pam_sm_setcred			= pam_sm_setcred,
 	.pam_sm_acct_mgmt		= pam_sm_acct_mgmt,

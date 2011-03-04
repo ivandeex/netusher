@@ -1,8 +1,8 @@
 #!/usr/bin/perl
 use strict;
-use IO::Socket::UNIX qw( SOCK_STREAM );
+use IO::Socket::UNIX qw(SOCK_STREAM);
 
-my $path = "/var/run/userwatch/uw-client.sock";
+my $path = "/var/run/netusher/nu-client.sock";
 my $sock = IO::Socket::UNIX->new(Type => SOCK_STREAM, Peer => $path)
     or die("can't connect to server: $!\n");
 my $cmd = join(' ', @ARGV);

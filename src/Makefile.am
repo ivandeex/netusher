@@ -18,28 +18,28 @@
 
 AUTOMAKE_OPTIONS = gnu
 
-noinst_PROGRAMS = pam_userwatch.so
+noinst_PROGRAMS = pam_netusher.so
 
 AM_CPPFLAGS = -I$(top_srcdir)
 AM_CFLAGS = -Wall -Wno-strict-aliasing -fPIC
 
 pam_mod_dir = @PAM_MODDIR@
 
-pam_userwatch_so_SOURCES = uw-pam.c
-pam_userwatch_so_LDFLAGS = -shared
-pam_userwatch_so_LDADD = -lpam
+pam_netusher_so_SOURCES = nu-pam.c
+pam_netusher_so_LDFLAGS = -shared
+pam_netusher_so_LDADD = -lpam
 
-pam_userwatch_so_CFLAGS = $(GLIB_CFLAGS) -D_REENTRANT $(AM_CFLAGS) -pipe @GCC_FVISIBILITY_HIDDEN@
+pam_netusher_so_CFLAGS = $(GLIB_CFLAGS) -D_REENTRANT $(AM_CFLAGS) -pipe @GCC_FVISIBILITY_HIDDEN@
 
-install-exec-local: install-pam_userwatch_so
+install-exec-local: install-pam_netusher_so
 
-uninstall-local: uninstall-pam_userwatch_so
+uninstall-local: uninstall-pam_netusher_so
 
-install-pam_userwatch_so: pam_userwatch.so
-	$(INSTALL_PROGRAM) -D pam_userwatch.so $(DESTDIR)$(pam_mod_dir)/pam_userwatch.so
+install-pam_netusher_so: pam_netusher.so
+	$(INSTALL_PROGRAM) -D pam_netusher.so $(DESTDIR)$(pam_mod_dir)/pam_netusher.so
 
-uninstall-pam_userwatch_so:
-	-rm -f $(DESTDIR)$(pam_mod_dir)/pam_userwatch.so
+uninstall-pam_netusher_so:
+	-rm -f $(DESTDIR)$(pam_mod_dir)/pam_netusher.so
 
 clean-local:
 	-rm -f *.slo *.la *~

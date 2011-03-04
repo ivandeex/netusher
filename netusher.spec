@@ -22,12 +22,12 @@
 %endif
 
 Summary:	Let users roam from machine to machine and still be accountable
-Name:		userwatch
+Name:		netusher
 Version:	0.0.1
 Release:	%{release}
 License:	GPL
 Group:		System
-URL:		http://vitki.net/v/projects/userwatch
+URL:		http://vitki.net/v/projects/netusher
 Source0:	%{name}-%{version}.tar.gz
 
 Requires: openssl >= %{ssl_ver}
@@ -67,38 +67,22 @@ make %{?_smp_mflags}
 %define httpd_modd /usr/lib/httpd/modules
 %define etc_initd %{_sysconfdir}/rc.d/init.d
 
-install -d %{buildroot}%{httpd_confd}
-cat << FOO > %{buildroot}%{httpd_confd}/mod_uwatch.conf
-LoadModule uwatch_module modules/mod_uwatch.so
-<IfModule mod_uwatch.c>
-  UserWatchEnable On
-</IfModule>
-FOO
+install -Dm0755 netusher-rc.d.sh %{buildroot}%{etc_initd}/netusher
 
-install -Dm0755 userwatch-rc.d.sh %{buildroot}%{etc_initd}/userwatch
-
-mv %{buildroot}%{httpd_modd}/libmod_uwatch.so \
-   %{buildroot}%{httpd_modd}/mod_uwatch.so
-
-rm %{buildroot}/lib/security/pam_uwatch.a
-rm %{buildroot}/lib/security/pam_uwatch.la
+rm %{buildroot}/lib/security/pam_netusher.a
+rm %{buildroot}/lib/security/pam_netusher.la
 
 %clean
 [ "%{buildroot}" != "/" ] && rm -rf %{buildroot}
 
 %files
 %defattr(0644,root,root,0755)
-/lib/security/pam_uwatch.so
-/lib/security/pam_uwatch_auth.so
-/lib/security/pam_uwatch_session.so
+/lib/security/pam_netusher.so
 %attr(0755,root,root) /usr/sbin/uwcli
 
 %files server
 %defattr(0644,root,root,0755)
-%{httpd_confd}/mod_uwatch.conf
-/usr/lib/httpd/modules/mod_uwatch.so
-%attr(0755,root,root) %{etc_initd}/userwatch
-%attr(0755,root,root) /usr/sbin/uwatchd
+%attr(0755,root,root) %{etc_initd}/netusher
 
 %description
 Let users roam from machine to machine and still be accountable.

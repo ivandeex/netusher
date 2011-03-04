@@ -1,13 +1,13 @@
 #!/usr/bin/perl
 #
-# UserWatch
+# NetUsher
 # Various caches
 # $Id$
 #
 
 use strict;
 use FindBin qw($Bin);
-require "$Bin/uw-common.inc.pm";
+require "$Bin/nu-common.inc.pm";
 
 use Digest::MD5 qw(md5_hex);
 
@@ -19,7 +19,7 @@ use Digest::MD5 qw(md5_hex);
 #
 use User::getgrouplist;
 
-our (%uw_config, %nss, %local_groups);
+our (%nu_config, %nss, %local_groups);
 my  (%cache_pool);
 
 #
@@ -82,7 +82,7 @@ sub get_user_uid_grp ($$) {
     }
 
     # update cache with (defined or even undefined) uid
-    cache_put("uid_grp", $user, [ $uid, $grp ], $uw_config{uid_cache_ttl});
+    cache_put("uid_grp", $user, [ $uid, $grp ], $nu_config{uid_cache_ttl});
     debug("get user:$user from:$nss{name} uid:$uid grp:$grp");
     $$grp_ref = $grp if defined $grp_ref;
     return $uid;
@@ -107,7 +107,7 @@ sub get_user_groups ($) {
         return;
     }
 
-    cache_put("groups", $user, $groups, $uw_config{group_cache_ttl});
+    cache_put("groups", $user, $groups, $nu_config{group_cache_ttl});
     debug("get user:$user from:$nss{name} groups:" . join(",", @$groups));
     return $groups;
 }
@@ -194,7 +194,7 @@ sub check_auth_cache ($$) {
 sub update_auth_cache ($$$) {
     my ($user, $pass, $result) = @_;
     return -1 if $result ne "success";
-    cache_put("auth", $user, md5_hex($pass), $uw_config{auth_cache_ttl});
+    cache_put("auth", $user, md5_hex($pass), $nu_config{auth_cache_ttl});
     debug("caching auth: user:$user pass:\*\*\*");
     return 0;
 }

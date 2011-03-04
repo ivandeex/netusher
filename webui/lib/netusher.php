@@ -1,21 +1,21 @@
 <?php
 /////////////////////////////////////////////////////////
-// UserWatch Web Interface
+// NetUsher Web Interface
 // Main Program
 // $Id$
 /////////////////////////////////////////////////////////
 
 $cfg = array(
     'mysql_host'  => 'localhost',
-    'mysql_user'  => 'userwatch',
-    'mysql_pass'  => 'userwatch',
-    'mysql_db'    => 'userwatch',
+    'mysql_user'  => 'netusher',
+    'mysql_pass'  => 'netusher',
+    'mysql_db'    => 'netusher',
 );
 
 $dbh = null;
 
 function setup () {
-    $file = fopen("/etc/userwatch/uw-server.conf", "r");
+    $file = fopen("/etc/netusher/nu-server.conf", "r");
     if ($file) {
         while ($line = fgets($file)) {
             if (preg_match('!^\\s*$!', $line) || preg_match('!^\\s*#!', $line))
@@ -118,7 +118,7 @@ function show_hosts ($self) {
         "tx_bytes"  => "Sent Bytes"
         );
     table_header($self, $table, $columns);
-    $query = table_query($table, "uw_openvpn", $columns);
+    $query = table_query($table, "nu_openvpn", $columns);
     $count = table_fetch_all($query, $columns);
     table_footer($table, $count);
 }
@@ -136,12 +136,12 @@ function show_users ($self) {
         "sid"       => "SID"
         );
     table_header($self, $table, $columns);
-    $query = table_query($table, "uw_users", $columns);
+    $query = table_query($table, "nu_users", $columns);
     $count = table_fetch_all($query, $columns);
     table_footer($table, $count);
 }
 
-function userwatch () {
+function netusher () {
     global $dbh;
     $err = setup();
     if ($err) {

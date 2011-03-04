@@ -2,18 +2,18 @@ dnl -*- Autoconf -*-      vi: set ts=4 sw=4 :
 dnl Process this file with autoconf to produce a configure script.
 AC_REVISION($Id$)dnl
 
-dnl **** configure.ac for UserWatch ****
+dnl **** configure.ac for NetUsher ****
 
 AC_PREREQ([2.59])
-AC_INIT([userwatch], [0.1], [vitkinet@gmail.com])
+AC_INIT([netusher], [0.1], [ivandeex@gmail.com])
 AC_CONFIG_AUX_DIR(autoconf)
 AC_CONFIG_SRCDIR([src])
 AC_CONFIG_HEADERS([src/config.h])
 AC_CONFIG_FILES([Makefile src/Makefile daemons/Makefile webui/Makefile etc/Makefile])
 
-AC_DEFINE([PACKAGE_COPYRIGHT], ["Copyright (c) 2011, vitki.net"],
+AC_DEFINE([PACKAGE_COPYRIGHT], ["Copyright (c) 2011, ivandeex"],
           [Define to the project copyright requisites])
-AC_DEFINE([PACKAGE_WEBSITE], ["http://vitki.net/userwatch"],
+AC_DEFINE([PACKAGE_WEBSITE], ["https://www.vanko.me/book/page/netusher"],
           [Define to the project web address])
 
 AM_INIT_AUTOMAKE

@@ -53,7 +53,7 @@ PRE_UNINSTALL = :
 POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
-noinst_PROGRAMS = pam_userwatch.so$(EXEEXT)
+noinst_PROGRAMS = pam_netusher.so$(EXEEXT)
 subdir = src
 DIST_COMMON = $(srcdir)/Makefile.am $(srcdir)/Makefile.in \
 	$(srcdir)/config.h.in
@@ -65,9 +65,9 @@ mkinstalldirs = $(install_sh) -d
 CONFIG_HEADER = config.h
 CONFIG_CLEAN_FILES =
 PROGRAMS = $(noinst_PROGRAMS)
-am_pam_userwatch_so_OBJECTS = pam_userwatch_so-uw-pam.$(OBJEXT)
-pam_userwatch_so_OBJECTS = $(am_pam_userwatch_so_OBJECTS)
-pam_userwatch_so_DEPENDENCIES =
+am_pam_netusher_so_OBJECTS = pam_netusher_so-nu-pam.$(OBJEXT)
+pam_netusher_so_OBJECTS = $(am_pam_netusher_so_OBJECTS)
+pam_netusher_so_DEPENDENCIES =
 DEFAULT_INCLUDES = -I. -I$(srcdir) -I.
 depcomp = $(SHELL) $(top_srcdir)/autoconf/depcomp
 am__depfiles_maybe = depfiles
@@ -79,8 +79,8 @@ LTCOMPILE = $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) \
 CCLD = $(CC)
 LINK = $(LIBTOOL) --tag=CC --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
 	$(AM_LDFLAGS) $(LDFLAGS) -o $@
-SOURCES = $(pam_userwatch_so_SOURCES)
-DIST_SOURCES = $(pam_userwatch_so_SOURCES)
+SOURCES = $(pam_netusher_so_SOURCES)
+DIST_SOURCES = $(pam_netusher_so_SOURCES)
 ETAGS = etags
 CTAGS = ctags
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
@@ -188,10 +188,10 @@ AUTOMAKE_OPTIONS = gnu
 AM_CPPFLAGS = -I$(top_srcdir)
 AM_CFLAGS = -Wall -Wno-strict-aliasing -fPIC
 pam_mod_dir = @PAM_MODDIR@
-pam_userwatch_so_SOURCES = uw-pam.c
-pam_userwatch_so_LDFLAGS = -shared
-pam_userwatch_so_LDADD = -lpam
-pam_userwatch_so_CFLAGS = $(GLIB_CFLAGS) -D_REENTRANT $(AM_CFLAGS) -pipe @GCC_FVISIBILITY_HIDDEN@
+pam_netusher_so_SOURCES = nu-pam.c
+pam_netusher_so_LDFLAGS = -shared
+pam_netusher_so_LDADD = -lpam
+pam_netusher_so_CFLAGS = $(GLIB_CFLAGS) -D_REENTRANT $(AM_CFLAGS) -pipe @GCC_FVISIBILITY_HIDDEN@
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-am
 
@@ -250,9 +250,9 @@ clean-noinstPROGRAMS:
 	  echo " rm -f $$p $$f"; \
 	  rm -f $$p $$f ; \
 	done
-pam_userwatch.so$(EXEEXT): $(pam_userwatch_so_OBJECTS) $(pam_userwatch_so_DEPENDENCIES) 
-	@rm -f pam_userwatch.so$(EXEEXT)
-	$(LINK) $(pam_userwatch_so_LDFLAGS) $(pam_userwatch_so_OBJECTS) $(pam_userwatch_so_LDADD) $(LIBS)
+pam_netusher.so$(EXEEXT): $(pam_netusher_so_OBJECTS) $(pam_netusher_so_DEPENDENCIES) 
+	@rm -f pam_netusher.so$(EXEEXT)
+	$(LINK) $(pam_netusher_so_LDFLAGS) $(pam_netusher_so_OBJECTS) $(pam_netusher_so_LDADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
@@ -260,7 +260,7 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pam_userwatch_so-uw-pam.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pam_netusher_so-nu-pam.Po@am__quote@
 
 .c.o:
 @am__fastdepCC_TRUE@	if $(COMPILE) -MT $@ -MD -MP -MF "$(DEPDIR)/$*.Tpo" -c -o $@ $<; \
@@ -283,19 +283,19 @@ distclean-compile:
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(LTCOMPILE) -c -o $@ $<
 
-pam_userwatch_so-uw-pam.o: uw-pam.c
-@am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_so_CFLAGS) $(CFLAGS) -MT pam_userwatch_so-uw-pam.o -MD -MP -MF "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo" -c -o pam_userwatch_so-uw-pam.o `test -f 'uw-pam.c' || echo '$(srcdir)/'`uw-pam.c; \
-@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo" "$(DEPDIR)/pam_userwatch_so-uw-pam.Po"; else rm -f "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo"; exit 1; fi
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='uw-pam.c' object='pam_userwatch_so-uw-pam.o' libtool=no @AMDEPBACKSLASH@
+pam_netusher_so-nu-pam.o: nu-pam.c
+@am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_netusher_so_CFLAGS) $(CFLAGS) -MT pam_netusher_so-nu-pam.o -MD -MP -MF "$(DEPDIR)/pam_netusher_so-nu-pam.Tpo" -c -o pam_netusher_so-nu-pam.o `test -f 'nu-pam.c' || echo '$(srcdir)/'`nu-pam.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/pam_netusher_so-nu-pam.Tpo" "$(DEPDIR)/pam_netusher_so-nu-pam.Po"; else rm -f "$(DEPDIR)/pam_netusher_so-nu-pam.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='nu-pam.c' object='pam_netusher_so-nu-pam.o' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_so_CFLAGS) $(CFLAGS) -c -o pam_userwatch_so-uw-pam.o `test -f 'uw-pam.c' || echo '$(srcdir)/'`uw-pam.c
+@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_netusher_so_CFLAGS) $(CFLAGS) -c -o pam_netusher_so-nu-pam.o `test -f 'nu-pam.c' || echo '$(srcdir)/'`nu-pam.c
 
-pam_userwatch_so-uw-pam.obj: uw-pam.c
-@am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_so_CFLAGS) $(CFLAGS) -MT pam_userwatch_so-uw-pam.obj -MD -MP -MF "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo" -c -o pam_userwatch_so-uw-pam.obj `if test -f 'uw-pam.c'; then $(CYGPATH_W) 'uw-pam.c'; else $(CYGPATH_W) '$(srcdir)/uw-pam.c'; fi`; \
-@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo" "$(DEPDIR)/pam_userwatch_so-uw-pam.Po"; else rm -f "$(DEPDIR)/pam_userwatch_so-uw-pam.Tpo"; exit 1; fi
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='uw-pam.c' object='pam_userwatch_so-uw-pam.obj' libtool=no @AMDEPBACKSLASH@
+pam_netusher_so-nu-pam.obj: nu-pam.c
+@am__fastdepCC_TRUE@	if $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_netusher_so_CFLAGS) $(CFLAGS) -MT pam_netusher_so-nu-pam.obj -MD -MP -MF "$(DEPDIR)/pam_netusher_so-nu-pam.Tpo" -c -o pam_netusher_so-nu-pam.obj `if test -f 'nu-pam.c'; then $(CYGPATH_W) 'nu-pam.c'; else $(CYGPATH_W) '$(srcdir)/nu-pam.c'; fi`; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/pam_netusher_so-nu-pam.Tpo" "$(DEPDIR)/pam_netusher_so-nu-pam.Po"; else rm -f "$(DEPDIR)/pam_netusher_so-nu-pam.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='nu-pam.c' object='pam_netusher_so-nu-pam.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_userwatch_so_CFLAGS) $(CFLAGS) -c -o pam_userwatch_so-uw-pam.obj `if test -f 'uw-pam.c'; then $(CYGPATH_W) 'uw-pam.c'; else $(CYGPATH_W) '$(srcdir)/uw-pam.c'; fi`
+@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(pam_netusher_so_CFLAGS) $(CFLAGS) -c -o pam_netusher_so-nu-pam.obj `if test -f 'nu-pam.c'; then $(CYGPATH_W) 'nu-pam.c'; else $(CYGPATH_W) '$(srcdir)/nu-pam.c'; fi`
 
 mostlyclean-libtool:
 	-rm -f *.lo
@@ -476,15 +476,15 @@ uninstall-am: uninstall-info-am uninstall-local
 	uninstall-info-am uninstall-local
 
 
-install-exec-local: install-pam_userwatch_so
+install-exec-local: install-pam_netusher_so
 
-uninstall-local: uninstall-pam_userwatch_so
+uninstall-local: uninstall-pam_netusher_so
 
-install-pam_userwatch_so: pam_userwatch.so
-	$(INSTALL_PROGRAM) -D pam_userwatch.so $(DESTDIR)$(pam_mod_dir)/pam_userwatch.so
+install-pam_netusher_so: pam_netusher.so
+	$(INSTALL_PROGRAM) -D pam_netusher.so $(DESTDIR)$(pam_mod_dir)/pam_netusher.so
 
-uninstall-pam_userwatch_so:
-	-rm -f $(DESTDIR)$(pam_mod_dir)/pam_userwatch.so
+uninstall-pam_netusher_so:
+	-rm -f $(DESTDIR)$(pam_mod_dir)/pam_netusher.so
 
 clean-local:
 	-rm -f *.slo *.la *~

@@ -1,13 +1,13 @@
 #!/usr/bin/perl
 #
-# UserWatch
+# NetUsher
 # LDAP stuff
 # $Id$
 #
 
 use strict;
 use FindBin qw($Bin);
-require "$Bin/uw-common.inc.pm";
+require "$Bin/nu-common.inc.pm";
 
 #
 # require: perl-LDAP
@@ -16,7 +16,7 @@ use Net::LDAP;
 use Socket;
 use IO::Handle;
 
-our (%uw_config, $config_file);
+our (%nu_config, $config_file);
 
 my $ldap_maxtries = 2;
 my $ldap_try_delay = 0.100;
@@ -39,7 +39,7 @@ sub ldap_init ($) {
 
     for (qw[ldap_uri ldap_bind_dn ldap_bind_pass
             ldap_user_base ldap_group_base]) {
-        next if defined $uw_config{$_};
+        next if defined $nu_config{$_};
         fail("$config_file: missing ldap parameter \"$_\"");
     }
 
@@ -49,14 +49,14 @@ sub ldap_init ($) {
     # Workaround: fork a subprocess for LDAP.
     #
     my $need_fork;
-    if ($uw_config{ldap_force_fork} eq "never") {
+    if ($nu_config{ldap_force_fork} eq "never") {
         $need_fork = 0;
-    } elsif ($uw_config{ldap_force_fork} eq "always") {
+    } elsif ($nu_config{ldap_force_fork} eq "always") {
         $need_fork = 1;
-    } elsif ($uw_config{ldap_force_fork} eq "auto") {
+    } elsif ($nu_config{ldap_force_fork} eq "auto") {
         # fork only if connection is ssl
-        my $conn_is_ssl = ($uw_config{ldap_uri} =~ m/^ldaps:/)
-                        || $uw_config{ldap_start_tls};
+        my $conn_is_ssl = ($nu_config{ldap_uri} =~ m/^ldaps:/)
+                        || $nu_config{ldap_start_tls};
         $need_fork = $conn_is_ssl;
     } else {
         fail("$config_file: ldap_force_fork should be one of never,always,auto");
@@ -118,17 +118,17 @@ sub ldap_get_user_uid_grp ($) {
         ($err, $uid, $grp) = split /\|/, $reply;
     } else {
         my ($attr_user, $attr_uid, $attr_gid, $attr_group)
-             = @uw_config{qw(ldap_attr_user ldap_attr_uid
+             = @nu_config{qw(ldap_attr_user ldap_attr_uid
                             ldap_attr_gid ldap_attr_group)};
         my (@res) = _ldap_search("($attr_user=$user)",
                                 [ $attr_uid, $attr_gid ],
-                                $uw_config{ldap_user_base});
+                                $nu_config{ldap_user_base});
         $err = $res[0];
         $uid = $res[1]->{$attr_uid};
         my $gid = $res[1]->{$attr_gid};
         if ($gid) {
             (@res) = _ldap_search("($attr_gid=$gid)", [ $attr_group ],
-                                $uw_config{ldap_group_base});
+                                $nu_config{ldap_group_base});
             $grp = $res[1]->{$attr_group};
         }
         $grp = $gid unless $grp;
@@ -150,9 +150,9 @@ sub ldap_get_user_groups ($) {
         ($err, @groups) = split /\|/, $reply;
     } else {
         my ($attr_group, $attr_member)
-                = @uw_config{qw(ldap_attr_group ldap_attr_member)};
+                = @nu_config{qw(ldap_attr_group ldap_attr_member)};
         my (@res) = _ldap_search("($attr_member=$user)", [ $attr_group ],
-                                $uw_config{ldap_group_base});
+                                $nu_config{ldap_group_base});
         $err = shift @res;
         push @groups, $_->{$attr_group} for (@res);
     }
@@ -240,7 +240,7 @@ sub _ldap_child_start () {
 
     # close ssl connections
     cleanup();
-    detach_stdio() if $uw_config{daemonize};
+    detach_stdio() if $nu_config{daemonize};
 
     _ldap_init(0);
     _ldap_child_loop();
@@ -286,7 +286,7 @@ sub _ldap_send_req ($) {
 
 sub _ldap_wait_reply ($$) {
     my ($req, $norestart) = @_;
-    my $timeout = $uw_config{ldap_timeout}
+    my $timeout = $nu_config{ldap_timeout}
                 + ($ldap_maxtries + 1) * $ldap_try_delay;
 
     for (my $try = 1; $try <= $ldap_maxtries; $try++) {
@@ -322,8 +322,8 @@ sub _ldap_init ($) {
     my ($first_init) = @_;
     cache_flush();
 
-    my ($err, $conn) = _ldap_connect($uw_config{ldap_bind_dn},
-                                    undef, $uw_config{ldap_bind_pass},
+    my ($err, $conn) = _ldap_connect($nu_config{ldap_bind_dn},
+                                    undef, $nu_config{ldap_bind_pass},
                                     0);
     if ($first_init && $err) {
         info("warning: ldap init failed: $err");
@@ -342,20 +342,20 @@ sub _ldap_init ($) {
 sub _ldap_connect ($$$$) {
     my ($bind_dn, $user, $pass, $just_check) = @_;
 
-    #debug("connecting to ldap uri:%s", $uw_config{ldap_uri});
-    my $conn = Net::LDAP->new($uw_config{ldap_uri},
-                                timeout => $uw_config{ldap_timeout},
+    #debug("connecting to ldap uri:%s", $nu_config{ldap_uri});
+    my $conn = Net::LDAP->new($nu_config{ldap_uri},
+                                timeout => $nu_config{ldap_timeout},
                                 version => 3)
         or return "ldap server down";
 
-    if ($uw_config{ldap_start_tls}) {
+    if ($nu_config{ldap_start_tls}) {
         $conn->start_tls()
             or return "ldap tls failed";
     }
 
     if (!$bind_dn) {
-        $bind_dn = sprintf('%s=%s,%s', $uw_config{ldap_attr_user},
-                            $user, $uw_config{ldap_user_base});
+        $bind_dn = sprintf('%s=%s,%s', $nu_config{ldap_attr_user},
+                            $user, $nu_config{ldap_user_base});
     }
     my $res = $conn->bind($bind_dn, password => $pass);
 
@@ -365,7 +365,7 @@ sub _ldap_connect ($$$$) {
     $error = "server down" unless $res;
     $error = $res->error() if $res && $res->code();
     debug("ldap uri:%s tls:%s bind:%s err:%s",
-            $uw_config{ldap_uri}, $uw_config{ldap_start_tls},
+            $nu_config{ldap_uri}, $nu_config{ldap_start_tls},
             $bind_dn, $res->error());
     $error = "invalid password" if $error && $user;
     undef $conn if $error;

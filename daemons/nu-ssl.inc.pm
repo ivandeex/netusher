@@ -1,13 +1,13 @@
 #!/usr/bin/perl
 #
-# UserWatch
+# NetUsher
 # SSL functions
 # $Id$
 #
 
 use strict;
 use FindBin qw($Bin);
-require "$Bin/uw-common.inc.pm";
+require "$Bin/nu-common.inc.pm";
 
 #
 # require: perl-Net-SSLeay
@@ -19,7 +19,7 @@ use Net::SSLeay ();
 use Net::SSLeay::Handle;
 use Sys::Syslog;
 
-our ($config_root, %uw_config);
+our ($config_root, %nu_config);
 
 ##############################################
 # Safe wrappers around Net::SSLeay
@@ -56,7 +56,7 @@ sub ssl_startup () {
     fail($@) if $@;
 
     $| = 1;
-    if ($uw_config{debug} > 1) {
+    if ($nu_config{debug} > 1) {
         $Net::SSLeay::trace = 3;
         Net::SSLeay::Handle->debug(1);
     }
@@ -167,7 +167,7 @@ sub ssl_create_context ($$) {
 
 sub _ssl_cert_verify_cb {
     my ($ok, $x509_store_ctx) = @_;
-    if ($uw_config{debug}) {
+    if ($nu_config{debug}) {
         my $cert = Net::SSLeay::X509_STORE_CTX_get_current_cert($x509_store_ctx);
         my $subj = Net::SSLeay::X509_get_subject_name($cert);
         $subj = Net::SSLeay::X509_NAME_oneline($subj);

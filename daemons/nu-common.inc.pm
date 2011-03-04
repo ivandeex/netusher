@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 #
-# UserWatch
+# NetUsher
 # Common functions
 # $Id$
 #
@@ -28,11 +28,11 @@ our $progname = $0;
 $progname =~ s!.*/!!g;
 $progname =~ s!\..*$!!g;
 
-our $config_root = "/etc/userwatch";
-our $status_root = "/var/run/userwatch";
+our $config_root = "/etc/netusher";
+our $status_root = "/var/run/netusher";
 our $config_file = "$config_root/$progname.conf";
 
-our %uw_config =
+our %nu_config =
     (
         # constants
         ifconfig            => "/sbin/ifconfig",
@@ -144,9 +144,9 @@ sub read_config ($$$) {
             my ($param, $value) = ($1, $2);
             $value = "" if $value eq '""' || $value eq "''";
             fail("$config: unknown parameter \"$param\"")
-                if !exists($uw_config{$param}) || !exists($h_allowed{$param});
-            if ($uw_config{$param} !~ /^\d+$/ || $value =~ /^\d+$/) {
-                $uw_config{$param} = $value;
+                if !exists($nu_config{$param}) || !exists($h_allowed{$param});
+            if ($nu_config{$param} !~ /^\d+$/ || $value =~ /^\d+$/) {
+                $nu_config{$param} = $value;
                 next;
             }
         }
@@ -156,15 +156,15 @@ sub read_config ($$$) {
 
     for my $param (sort keys %h_required) {
         fail("$config: missing required parameter \"$param\"")
-            unless defined $uw_config{$param};
+            unless defined $nu_config{$param};
     }
 
-    $uw_config{stdout} = 1 unless $uw_config{syslog};
+    $nu_config{stdout} = 1 unless $nu_config{syslog};
 }
 
 sub require_program ($) {
     my ($prog) = @_;
-    my $path = $uw_config{$prog};
+    my $path = $nu_config{$prog};
     fail("$path: required program not found") unless -x $path;
 }
 
@@ -173,7 +173,7 @@ sub require_program ($) {
 #
 
 sub log_init () {
-    return unless $uw_config{syslog};
+    return unless $nu_config{syslog};
     my $prog = $0;
     $prog =~ s!^.*/!!;
     $prog =~ s!\..*$!!;
@@ -186,10 +186,10 @@ $SIG{__WARN__} = sub { info(join("\n", @_)); };
 sub fail ($@) {
     my $fmt = shift;
     chomp(my $msg = "[ fail] " . sprintf($fmt, @_));
-    syslog("err", $msg) if $uw_config{syslog};
+    syslog("err", $msg) if $nu_config{syslog};
     undef $SIG{__DIE__};
     $msg = sprintf("[%5d] ", $$) . $msg;
-    if ($uw_config{stacktrace}) {
+    if ($nu_config{stacktrace}) {
         confess(_fmtmsg($msg));
     } else {
         die(_fmtmsg($msg));
@@ -199,16 +199,16 @@ sub fail ($@) {
 sub info ($@) {
     my $fmt = shift;
     chomp(my $msg = "[ info] " . sprintf($fmt, @_));
-    syslog("notice", $msg) if $uw_config{syslog};
-    print _fmtmsg($msg) if $uw_config{stdout};
+    syslog("notice", $msg) if $nu_config{syslog};
+    print _fmtmsg($msg) if $nu_config{stdout};
 }
 
 sub debug ($@) {
-    return unless $uw_config{debug};
+    return unless $nu_config{debug};
     my $fmt = shift;
     chomp(my $msg = "[debug] " . sprintf($fmt, @_));
-    syslog("info", $msg) if $uw_config{syslog};
-    print _fmtmsg($msg) if $uw_config{stdout};    
+    syslog("info", $msg) if $nu_config{syslog};
+    print _fmtmsg($msg) if $nu_config{stdout};    
 }
 
 sub _fmtmsg ($) {
@@ -292,16 +292,16 @@ sub init_timeouts ($$) {
     }
     $chan->{close_handler} = $close_handler;
 
-    if ($uw_config{idle_timeout} > 0) {
-        $chan->{idle_timeout} = $uw_config{idle_timeout};
+    if ($nu_config{idle_timeout} > 0) {
+        $chan->{idle_timeout} = $nu_config{idle_timeout};
         $chan->{idle_watch} = $ev_loop->timer(
                                 $chan->{idle_timeout}, $chan->{idle_timeout},
                                 sub { _chan_timeout_handler($chan, 'idle') }
                                 );
     }
 
-    if ($uw_config{rw_timeout} > 0) {
-        $chan->{rw_timeout} = $uw_config{rw_timeout};
+    if ($nu_config{rw_timeout} > 0) {
+        $chan->{rw_timeout} = $nu_config{rw_timeout};
         $chan->{rwt_watch} = $ev_loop->timer_ns(
                                 $chan->{rw_timeout}, $chan->{rw_timeout},
                                 sub { _chan_timeout_handler($chan, 'rw') }
@@ -362,9 +362,9 @@ sub _chan_timeout_handler ($$) {
 my  ($in_parent, $pid_written, $already_daemon, %temp_files);
 
 sub daemonize () {
-    return 0 if !$uw_config{daemonize} || $already_daemon;
+    return 0 if !$nu_config{daemonize} || $already_daemon;
 
-    my $pid_file = $uw_config{pid_file};
+    my $pid_file = $nu_config{pid_file};
     if ($pid_file) {
         if (-e $pid_file) {
             my $pid = read_file($pid_file);
@@ -403,14 +403,14 @@ sub detach_stdio () {
     open(STDIN,  '</dev/null') or fail("can't read /dev/null: $!");
     open(STDOUT, '>/dev/null') or fail("can't write to /dev/null: $!");
     open(STDERR, '>/dev/null') or fail("can't write to /dev/null: $!");
-    $uw_config{stdout} = 0;
+    $nu_config{stdout} = 0;
 }
 
 sub end_daemon () {
     unlink($_) for (keys %temp_files);
     %temp_files = ();
     return if $in_parent || $ev_reload;
-    unlink($uw_config{pid_file}) if $pid_written;
+    unlink($nu_config{pid_file}) if $pid_written;
     info("$progname finished");
 }
 
@@ -423,11 +423,11 @@ our ($etc_passwd_str, $etc_passwd_sign);
 our ($etc_group_str, $etc_group_sign);
 
 sub rescan_etc () {
-    my ($sign) = super_stat($uw_config{etc_passwd});
+    my ($sign) = super_stat($nu_config{etc_passwd});
     if ($sign ne $etc_passwd_sign) {
         $etc_passwd_sign = $sign;
-        $etc_passwd_str = read_file($uw_config{etc_passwd})
-            or fail("$uw_config{etc_passwd}: cannot open");
+        $etc_passwd_str = read_file($nu_config{etc_passwd})
+            or fail("$nu_config{etc_passwd}: cannot open");
         %local_users = ();
         for (split /\n/, $etc_passwd_str) {
             next unless m"^([a-xA-Z0-9\.\-_]+):\w+:(\d+):\d+:";
@@ -437,11 +437,11 @@ sub rescan_etc () {
         debug("rescan local users");
     }
 
-    ($sign) = super_stat($uw_config{etc_group});
+    ($sign) = super_stat($nu_config{etc_group});
     if ($sign ne $etc_group_sign) {
         $etc_group_sign = $sign;
-        $etc_group_str = read_file($uw_config{etc_group})
-            or fail("$uw_config{etc_group}: cannot open");
+        $etc_group_str = read_file($nu_config{etc_group})
+            or fail("$nu_config{etc_group}: cannot open");
         %local_groups = ();
         for (split /\n/, $etc_group_str) {
             next unless m"^([\w\d\.\-_]+):\w+:(\d+):";
@@ -454,7 +454,7 @@ sub rescan_etc () {
 
 sub is_local_user ($) {
     my ($user) = @_;
-    return $uw_config{skip_local} && exists($local_users{$user});
+    return $nu_config{skip_local} && exists($local_users{$user});
 }
 
 ##############################################
