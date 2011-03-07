@@ -428,6 +428,7 @@ sub scan_utmp () {
         $rhost =~ y# |!@~#_#;
         $user =~ y# |!@~#_#;
         $tty =~ y# |!@~#_#;
+        $tty =~ s#^/dev/##;
         my $sid = $rhost ? "${tty}\@${rhost}" : $tty;
 
         push @utmp, {

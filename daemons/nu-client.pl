@@ -27,7 +27,7 @@ our ($ev_loop, %ev_watch, $ev_reload);
 our (%local_users);
 my  ($srv_chan, $finished, @net_jobs);
 my  ($reconnect_pending, $reconnect_fast);
-my  ($fix_interval, $fix_attempts, @fix_jobs, %utmp_fixes);
+my  ($fix_interval, $fix_attempts, @fix_jobs, %utmp_fixes, %pid_fixes);
 
 our %nss = (
             name => "nss",
@@ -192,9 +192,12 @@ sub logon_action ($) {
             ($job->{euid}, $job->{pid}, $job->{prog}) = ("", "", "");
         }
     }
+    my ($j_pid, $j_prog) = ($job->{pid}, $job->{prog});
 
-    # fix the remote host part of sid
+    # fix the login sid: remote host and tty
     my ($tty, $rhost) = split(/\@/, $job->{sid});
+    $tty =~ s#^/dev/##;
+
     if ($rhost eq "localhost" || $rhost eq "localhost.localdomain") {
         $rhost = "127.0.0.1";
     } elsif ($rhost && $rhost !~ /^\d+\.\d+\.\d+\.\d+$/) {
@@ -208,11 +211,12 @@ sub logon_action ($) {
     } elsif (!$rhost) {
         $rhost = "";
     }
+
     my $sid = $job->{sid} = $rhost ? "${tty}\@${rhost}" : $tty;
 
     # detect user login time and possibly fix tty
     my @utmp = scan_utmp();
-    my ($cmd, $user, $pid) = ($job->{cmd}, $job->{user}, $job->{pid});
+    my ($cmd, $user, $pid) = ($job->{cmd}, $job->{user}, $j_pid);
     my $btime;
     debug("utmp search: user:%s pid:%s tty:%s rhost:%s",
             $user, $pid, $tty, $rhost);
@@ -223,8 +227,9 @@ sub logon_action ($) {
         debug("utmp fix: user:%s pid:%s sid:%s btime:%s",
                 $user, $pid, $sid, $btime);
         if ($cmd eq "logout") {
-            debug("remove fix: $key");
+            debug("remove fix: $key ($j_pid)");
             delete $utmp_fixes{$key};
+            delete $pid_fixes{$j_pid};
         }
     }
 
@@ -241,8 +246,9 @@ sub logon_action ($) {
                     $u->{user}, $u->{pid}, $u->{tty}, $u->{rhost}, $cmd);
             # remove fix if logging out
             if ($cmd eq "logout") {
-                debug("remove fix: $key");
+                debug("remove fix: $key ($j_pid)");
                 delete $utmp_fixes{$key};
+                delete $pid_fixes{$j_pid};
             }
         }
 
@@ -251,18 +257,21 @@ sub logon_action ($) {
             $btime = $u->{btime};
             $key = "$user|$sid|$pid";
             $utmp_fixes{$key} = "$key|$btime";
+            $pid_fixes{$j_pid} = $j_prog;
             debug("add fix (%s): %s ==> %s",
-                    $job->{prog}, $key, $utmp_fixes{$key});
+                    $j_prog, $key, $utmp_fixes{$key});
         }
 
         # /bin/su: check parent processes
-        elsif ($job->{prog} eq "/bin/su" && $u->{user} eq "root"
-                && $u->{tty} eq $tty && $u->{rhost} eq $rhost) {
-            my $ppid = parent_pid($pid);
-            $ppid = parent_pid($ppid) if $ppid && $u->{pid} != $ppid;
+        elsif ($j_prog eq "/bin/su" && $u->{tty} eq $tty && $u->{rhost} eq $rhost) {
+            my $ppid = $pid;
+            while ($ppid && $ppid != 1 && $ppid != $u->{pid}) {
+                $ppid = parent_pid($ppid);
+            }
             if ($u->{pid} == $ppid) {
                 $btime = $u->{btime};
                 $utmp_fixes{$key} = "$user|$sid|$pid|$btime";
+                $pid_fixes{$j_pid} = $j_prog;
                 debug("add fix (su): %s ==> %s", $key, $utmp_fixes{$key});
             }
         }
@@ -274,6 +283,7 @@ sub logon_action ($) {
             $key = "$user|$sid|$pid";
             $sid = $u->{sid};
             $utmp_fixes{$key} = "$user|$sid|$pid|$btime";
+            $pid_fixes{$j_pid} = $j_prog;
             debug("add fix (ssh): %s ==> %s", $key, $utmp_fixes{$key});
         }
     }
@@ -322,6 +332,12 @@ sub remove_stale_fixes () {
         if (kill(0, $pid1) == 0 || kill(0, $pid2) == 0) {
             debug("remove stale fix: $key");
             delete $utmp_fixes{$key};
+        }
+    }
+    for my $pid1 (keys %pid_fixes) {
+        if (kill(0, $pid1) == 0) {
+            debug("remove stale pid: $pid1");
+            delete $pid_fixes{$pid1};
         }
     }
 }
@@ -585,7 +601,8 @@ sub unix_accept_pending () {
 
     # determine who is our client
     my ($pid, $euid, $egid) = $conn->peercred();
-    my $prog = readlink("/proc/$pid/exe");
+    # if the program has exited already, detect it from recorded fix
+    my $prog = $pid_fixes{$pid} ? $pid_fixes{$pid} : readlink("/proc/$pid/exe");
     my $addr = "$euid:$pid:$prog";
 
     my $c_chan = {
