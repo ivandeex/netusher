@@ -31,8 +31,13 @@ img {
 	overflow: hidden;
 	height: 100px;
 	min-width: 980px;
-	margin: 16px 0;
+	margin: 16px 0 0 0;
 	border-bottom: 4px solid #99cccc;
+}
+
+#header-inner {
+	margin: 0;
+	padding: 0;
 }
 
 #logo-text {
@@ -79,8 +84,8 @@ img {
 #footer {
 	display: block;
 	width: 100%;
-    height: 80px;
-	margin-top: 40px;
+	height: 20px;
+	margin-top: 10px;
 	background-color: #fff;
 	border-top: 4px solid #99cccc;
 }
@@ -88,7 +93,7 @@ img {
 #footer-inner {
 	display: inline;
 	float: left;
-	margin: 30px;
+	margin: 10px;
 	font-size: 0.5em;
 }
 
@@ -101,7 +106,13 @@ img {
 /* content */
 
 #content {
-    padding: 8px;
+	padding: 8px;
+	margin: 0;
+}
+
+#content-inner {
+	margin: 0;
+	padding: 0;
 }
 
 #content h1 {
@@ -109,7 +120,7 @@ img {
 	font-family: Georgia, Arial, Helvetica;
 	font-size: 1.5em;
 	font-weight: bold;
-	margin-left: 10px;
+	margin: 15px 0 5px 10px;
 }
 
 #content a {
@@ -137,28 +148,28 @@ img {
 /* tables */
 
 #content table {
-	border: 3px solid #b8b8b8;
+	border: 2px solid #b8b8b8;
 	border-collapse: collapse;
 	margin: 4px;
 }
 
 #content td, #content th {
-	border: 3px solid #b8b8b8;
+	border: 2px solid #b8b8b8;
 	padding: 5px;
 }
 
 #content tr.even {
-	border: 3px solid #b8b8b8;
+	border: 2px solid #b8b8b8;
 	background-color: #f0f8ff;
 }
 
 #content tr.odd {
-	border: 3px solid #b8b8b8;
+	border: 2px solid #b8b8b8;
 	background-color: #f0f0ff;
 }
 
 #content tr:hover {
-	border: 3px solid #b8b8b8;
+	border: 2px solid #b8b8b8;
 	background-color: #ffffff;
 }
 
@@ -185,4 +196,10 @@ img {
 	padding: 0;
 }
 
+.query-results {
+	max-height: 270px;
+	overflow: auto;
+	padding: 8px 16px;
+	border: 3px solid #ccc;
+}
 

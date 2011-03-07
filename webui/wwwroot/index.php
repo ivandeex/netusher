@@ -40,9 +40,7 @@ netusher();
 ?>
     </div>
     </div>
-    <div id="footer">
-      <div id="footer-inner"> <p>&copy; 2010-2011, vitki.net</p> </div>
-    </div>
+    <div id="footer"> <div id="footer-inner"></div> </div>
   </div>
   </div>
 </body>

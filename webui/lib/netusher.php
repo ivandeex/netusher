@@ -150,8 +150,8 @@ function netusher () {
         return;
     }
     $self = "index.php";
-    show_hosts($self);
     show_users($self);
+    show_hosts($self);
     mysql_close($dbh);
 }
 
