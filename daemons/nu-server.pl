@@ -475,6 +475,8 @@ sub cleanup () {
 
 END { cleanup(); }
 
+$ENV{LANGUAGE} = "en";
+
 while (1) {
     main_loop();
     last unless $ev_reload;
