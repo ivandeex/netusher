@@ -277,8 +277,7 @@ sub logon_action ($) {
         }
 
         # ssh: wait for utmp record
-        elsif ($tty eq "ssh" && $u->{user} eq $user
-                && $u->{pid} eq $pid && $u->{rhost} eq $rhost) {
+        elsif ($tty eq "ssh" && $u->{user} eq $user && $u->{pid} eq $pid) {
             $btime = $u->{btime};
             $key = "$user|$sid|$pid";
             $sid = $u->{sid};
