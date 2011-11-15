@@ -249,7 +249,7 @@ sub update_user_mapping ($$$$) {
             $user->{user}, $user->{method}, $user->{sid}, $user->{btime});
 
         # update existing record
-        mysql_execute(
+        db_execute(
             "UPDATE nu_users SET end_time = NOW(), running = 0
             WHERE username = ? AND vpn_ip = ?
             AND ('' = ? OR sid = ?)
@@ -260,7 +260,7 @@ sub update_user_mapping ($$$$) {
             xtrim($user->{method}), $user->{method},
             xtrim($user->{btime}), $user->{btime});
 
-        mysql_commit();
+        db_commit();
     }
 
     if ($best) {
@@ -268,7 +268,7 @@ sub update_user_mapping ($$$$) {
             $best->{user}, $best->{method}, $best->{sid}, $best->{btime}, $cmd);
 
         # if there were previous active users, end their sessions
-        mysql_execute(
+        db_execute(
             "UPDATE nu_users
             SET end_time = FROM_UNIXTIME(?), running = 0
             WHERE vpn_ip = ? AND running = 1 AND beg_time < FROM_UNIXTIME(?)",
@@ -276,16 +276,35 @@ sub update_user_mapping ($$$$) {
             );
 
         # insert or update existing record
-        mysql_execute(
-            "INSERT INTO nu_users
-            (vpn_ip,username,beg_time,end_time,method,sid,running)
-            VALUES (?, ?, FROM_UNIXTIME(?), NOW(), ?, ?, 1)
-            ON DUPLICATE KEY UPDATE
-            end_time = NOW(), running = 1",
-            $vpn_ip, $best->{user}, $best->{btime}, $best->{method}, $best->{sid}
-            );
+        if ($nu_config{db_type} eq "mysql") {
+            db_execute(
+                "INSERT INTO nu_users
+                (vpn_ip,username,beg_time,end_time,method,sid,running)
+                VALUES (?, ?, FROM_UNIXTIME(?), NOW(), ?, ?, 1)
+                ON DUPLICATE KEY UPDATE
+                end_time = NOW(), running = 1",
+                $vpn_ip, $best->{user}, $best->{btime}, $best->{method}, $best->{sid}
+                );
+        }
+        else {
+            # postgresql
+            my $sth = db_execute(
+                "UPDATE nu_users
+                SET end_time = NOW(), running = 1
+                WHERE beg_time = FROM_UNIXTIME(?) AND username = ? AND vpn_ip = ?",
+                $best->{btime}, $best->{user}, $vpn_ip
+                );
+            if ($sth->rows() < 1) {
+                db_execute(
+                    "INSERT INTO nu_users
+                    (vpn_ip,username,beg_time,end_time,method,sid,running)
+                    VALUES (?, ?, FROM_UNIXTIME(?), NOW(), ?, ?, 1)",
+                    $vpn_ip, $best->{user}, $best->{btime}, $best->{method}, $best->{sid}
+                    );
+            }
+        }
 
-        mysql_commit();
+        db_commit();
     }
 
     iptables_update($vpn_ip, 1, users_from_ip($vpn_ip));
@@ -294,10 +313,12 @@ sub update_user_mapping ($$$$) {
 sub purge_expired_users () {
     debug("purge expired users");
     cache_gc();
-    mysql_execute(sprintf("
-        UPDATE nu_users SET running = 0
-        WHERE running = 1 AND end_time < DATE_SUB(NOW(), INTERVAL %s SECOND)",
-        $nu_config{user_retention}));
+    my $last_time = sprintf($nu_config{db_type} eq "mysql"
+                                ? "DATE_SUB(NOW(), INTERVAL \%s SECOND)"
+                                : "NOW() - INTERVAL '\%s SECOND'",
+                           $nu_config{user_retention});
+    db_execute("UPDATE nu_users SET running = 0
+                WHERE running = 1 AND end_time < $last_time");
 }
 
 sub login_weight ($) {
@@ -331,10 +352,10 @@ sub detect_login_method ($) {
 sub users_from_ip ($) {
     my ($vpn_ip) = @_;
     return 0 unless $vpn_ip;
-    my $sth = mysql_execute("SELECT COUNT(*) FROM nu_users
+    my $sth = db_execute("SELECT COUNT(*) FROM nu_users
                             WHERE running = 1 AND vpn_ip = ?",
                             $vpn_ip);
-    my $count = mysql_fetch1($sth);
+    my $count = db_fetch1($sth);
     $count = 0 unless $count;
     debug("got $count active users from vpn:$vpn_ip");
     return $count;
@@ -348,14 +369,14 @@ sub main_loop () {
     read_config($config_file,
                 # required parameters
                 [ qw(
-                    vpn_net mysql_host mysql_db mysql_user mysql_pass
+                    vpn_net db_host db_dbname db_user db_pass
                 )],
                 # optional parameters
                 [ qw(
                     port ca_cert peer_pem idle_timeout rw_timeout
                     syslog stdout debug stacktrace daemonize
                     prefer_nss skip_local authorize_permit
-                    mysql_port login_methods
+                    db_type db_port login_methods
                     uid_cache_ttl group_cache_ttl
                     user_retention purge_interval
                     ldap_uri ldap_bind_dn ldap_bind_pass
@@ -391,15 +412,15 @@ sub main_loop () {
             );
     }
 
-    mysql_connect();
+    db_connect();
     ev_create_loop();
     vpn_init();
     iptables_init();
     dyndns_init();
 
     if (daemonize()) {
-        # clone dbi-mysql and event loop in the child
-        mysql_clone();
+        # clone dbi and event loop in the child
+        db_clone();
         $ev_loop->loop_fork();
     }
 
@@ -468,7 +489,7 @@ sub cleanup () {
     if (!$ldap_child) {
         ev_remove_handlers();
         # disconnecting from mysql in a child process screws up parent
-        mysql_close();
+        db_close();
         end_daemon();
     }
 }

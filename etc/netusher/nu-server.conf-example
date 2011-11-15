@@ -94,26 +94,31 @@
 # Database parameters
 #
 
-# Parameter: mysql_host
+# Parameter: db_type
+# Can take one of two values: "mysql" or "pgsql"
+# Default: mysql
+#db_type = pgsql
+
+# Parameter: db_host
 # Hostname or IP address of the database server.
 # Default: localhost
-#mysql_host = mysql.company.com
+#db_host = db.company.com
 
-# Parameter: mysql_port
+# Parameter: db_port
 # Listening port of the database server.
-# Default: 3306
-#mysql_port = 3306
+# Default: 3306 for mysql or 5432 for postgresql
+#db_port = 1234
 
-# Parameters: mysql_user, mysql_pass
+# Parameters: db_user, db_pass
 # Username and password for database connection.
 # Default: none, required
-mysql_user = mydbuser
-mysql_pass = secret
+db_user = mydbuser
+db_pass = secret
 
-# Parameter: mysql_db
-# MySQL database name.
+# Parameter: db_dbname
+# Database name on server.
 # Default: none, required
-mysql_db = netusher
+db_dbname = netusher
 
 ##############################################
 # OpenVPN parameters
@@ -313,7 +318,7 @@ vpn_net = 192.168.0.0
 # Parameter: debug
 # If this is set to 1, program will print a lot of debugging information.
 # Default: 0
-#debug = 1
+#debug = 3
 
 # Parameter: ldap_force_fork
 # Client and server NetUsher daemons interact over a secure SSL connection.

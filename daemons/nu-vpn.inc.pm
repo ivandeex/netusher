@@ -63,7 +63,7 @@ sub vpn_init () {
         #
         # setup vpn ip mapping 
         #
-        my $sth = mysql_execute("SELECT vpn_ip, real_ip, cname,
+        my $sth = db_execute("SELECT vpn_ip, real_ip, cname,
                                 UNIX_TIMESTAMP(beg_time)
                                 FROM nu_openvpn WHERE running = 1");
         my @purge;
@@ -85,7 +85,7 @@ sub vpn_init () {
 
         # purge stale old sessions
         for my $ip_time (@purge) {
-            mysql_execute("UPDATE nu_openvpn SET running = 0
+            db_execute("UPDATE nu_openvpn SET running = 0
                             WHERE beg_time = FROM_UNIXTIME(?) AND vpn_ip = ?",
                         $ip_time->[0], $ip_time->[1]);
         }
@@ -288,7 +288,7 @@ sub vpn_connected ($%) {
     if (exists($vpn_session{$vpn_ip})
             && $vpn_session{$vpn_ip}{beg_time} ne $beg_time) {
         debug("purge previous vpn session vpn:$vpn_ip ($msg)");
-        mysql_execute("
+        db_execute("
             UPDATE nu_openvpn SET running = 0, end_time = FROM_UNIXTIME(?)
             WHERE beg_time < FROM_UNIXTIME(?) AND vpn_ip = ? AND running = 1",
             $arg{beg_time} - 1, $arg{beg_time}, $arg{vpn_ip});
@@ -297,19 +297,19 @@ sub vpn_connected ($%) {
 
     if (exists $vpn_session{$vpn_ip}) {
         # prolong existsing session
-        mysql_execute("
-            UPDATE nu_openvpn SET end_time = IFNULL(FROM_UNIXTIME(?),NOW()),
-                running=1, cname = IFNULL(?,cname),
-                rx_bytes = IFNULL(?,rx_bytes), tx_bytes = IFNULL(?,tx_bytes)
+        db_execute("
+            UPDATE nu_openvpn SET end_time = COALESCE(FROM_UNIXTIME(?),NOW()),
+                running=1, cname = COALESCE(?,cname),
+                rx_bytes = COALESCE(?,rx_bytes), tx_bytes = COALESCE(?,tx_bytes)
             WHERE vpn_ip = ? AND beg_time = FROM_UNIXTIME(?)",
             $arg{end_time}, $arg{cname}, $arg{rx_bytes}, $arg{tx_bytes},
             $vpn_ip, $beg_time);
     } else {
         # create new session
-        mysql_execute("
+        db_execute("
             INSERT INTO nu_openvpn (vpn_ip,beg_time,end_time,
                 running,cname, real_ip,real_port,rx_bytes,tx_bytes)
-            VALUES (?, FROM_UNIXTIME(?), IFNULL(FROM_UNIXTIME(?),NOW()),
+            VALUES (?, FROM_UNIXTIME(?), COALESCE(FROM_UNIXTIME(?),NOW()),
                 1,?, ?,?,?,?)",
             $vpn_ip, $beg_time, $arg{end_time},  $arg{cname},
             $arg{real_ip}, $arg{real_port}, $arg{rx_bytes}, $arg{tx_bytes});
@@ -323,7 +323,7 @@ sub vpn_connected ($%) {
         $modified = 1;
     }
 
-    mysql_commit();
+    db_commit();
     return $modified;
 }
 
@@ -344,15 +344,15 @@ sub vpn_disconnected ($%) {
         return 0;
     }
 
-    mysql_execute("UPDATE nu_openvpn SET running = 0,
-                    end_time = IFNULL(FROM_UNIXTIME(?),end_time),
-                    rx_bytes = IFNULL(?,rx_bytes),
-                    tx_bytes = IFNULL(?,tx_bytes)
+    db_execute("UPDATE nu_openvpn SET running = 0,
+                    end_time = COALESCE(FROM_UNIXTIME(?),end_time),
+                    rx_bytes = COALESCE(?,rx_bytes),
+                    tx_bytes = COALESCE(?,tx_bytes)
                 WHERE running = 1 AND vpn_ip = ?
                 AND   (? IS NULL OR beg_time = FROM_UNIXTIME(?))",
                 $arg{end_time}, $arg{rx_bytes}, $arg{tx_bytes},
                 $vpn_ip, $beg_time, $beg_time);
-    mysql_commit();
+    db_commit();
 
     if (exists $vpn_session{$vpn_ip}) {
         info("vpn $vpn_ip disconnected ($msg)");
@@ -744,19 +744,36 @@ sub run_iptables ($$) {
 
 my  ($dbh, %sth_cache);
 
-sub mysql_connect () {
-    mysql_close();
-    my $uri = sprintf("DBI:mysql:%s;host=%s",
-                    $nu_config{mysql_db}, $nu_config{mysql_host});
-    $dbh = DBI->connect($uri, $nu_config{mysql_user}, $nu_config{mysql_pass})
-		or fail("cannot connect to database");
-    $dbh->{mysql_enable_utf8} = 1;
-    $dbh->{mysql_auto_reconnect} = 1;
-    $dbh->{AutoCommit} = 0;
-    $dbh->do("SET NAMES 'utf8'");
+sub db_connect () {
+    db_close();
+    my $dsn;
+    if ($nu_config{db_type} eq "mysql") {
+        $nu_config{db_port} = 3306 unless $nu_config{db_port};
+        $dsn = sprintf("DBI:mysql:database=%s;host=%s;port=%s",
+                $nu_config{db_dbname}, $nu_config{db_host}, $nu_config{db_port});
+        $dbh = DBI->connect($dsn, $nu_config{db_user}, $nu_config{db_pass})
+	            or fail("cannot connect to database");
+        $dbh->{mysql_enable_utf8} = 1;
+        $dbh->{mysql_auto_reconnect} = 1;
+        $dbh->{AutoCommit} = 0;
+        $dbh->do("SET NAMES 'utf8'");
+    }
+    elsif ($nu_config{db_type} eq "pgsql") {
+        $nu_config{db_port} = 5432 unless $nu_config{db_port};
+        $dsn = sprintf("DBI:Pg:dbname=%s;host=%s;port=%s",
+                $nu_config{db_dbname}, $nu_config{db_host}, $nu_config{db_port});
+        $dbh = DBI->connect($dsn, $nu_config{db_user}, $nu_config{db_pass})
+	            or fail("cannot connect to database");
+        $dbh->{pg_enable_utf8} = 1;
+        $dbh->{AutoCommit} = 0;
+        $dbh->do("set client_encoding=\"UTF8\"");
+    }
+    else {
+        fail("invalid database type '".$nu_config{db_type}."'");
+    }
 }
 
-sub mysql_close () {
+sub db_close () {
     %sth_cache = ();
     if (defined $dbh) {
         eval { $dbh->disconnect() };
@@ -764,23 +781,24 @@ sub mysql_close () {
     }
 }
 
-sub mysql_clone () {
+sub db_clone () {
     my $child_dbh = $dbh->clone();
-    mysql_close();
+    db_close();
     $dbh = $child_dbh;
 }
 
-sub mysql_execute ($@) {
+sub db_execute ($@) {
     my ($sql, @params) = @_;
     my $sth = $sth_cache{$sql};
     unless (defined $sth) {
         $sth = $dbh->prepare($sql);
-        $sth_cache{$sql} = $sth;
+        $sth_cache{$sql} = $sth
+            if $nu_config{db_type} eq "mysql";
     }
     my $ok = { $sth->execute(@params) };
     my $num = $sth->rows();
     if (!$ok) {
-        info("mysql error: %s\n", $sth->errstr());
+        info("database error: %s\n", $sth->errstr());
         $num = -1;
     }
     if ($nu_config{debug} & 2) {
@@ -790,13 +808,13 @@ sub mysql_execute ($@) {
     return $sth;
 }
 
-sub mysql_fetch1 ($) {
+sub db_fetch1 ($) {
     my ($sth) = @_;
     my @row = $sth->fetchrow_array();
     return $row[0];
 }
 
-sub mysql_commit () {
+sub db_commit () {
     eval { $dbh->commit(); };
 }
 

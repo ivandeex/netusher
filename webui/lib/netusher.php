@@ -6,15 +6,19 @@
 /////////////////////////////////////////////////////////
 
 $cfg = array(
-    'mysql_host'  => 'localhost',
-    'mysql_user'  => 'netusher',
-    'mysql_pass'  => 'netusher',
-    'mysql_db'    => 'netusher',
+    'db_type'    => 'mysql',
+    'db_host'    => 'localhost',
+    'db_port'    => '0',
+    'db_user'    => 'netusher',
+    'db_pass'    => 'netusher',
+    'db_dbname'  => 'netusher',
 );
 
 $dbh = null;
 
 function setup () {
+    global $cfg, $dbh;
+
     $file = fopen("/etc/netusher/nu-server.conf", "r");
     if ($file) {
         while ($line = fgets($file)) {
@@ -27,13 +31,77 @@ function setup () {
         fclose($file);
     }
 
-    global $dbh;
-    $dbh = @mysql_connect($cfg['mysql_host'], $cfg['mysql_user'], $cfg['mysql_pass']);
-    if (!$dbh)
-        return "cannot connect to database: " . mysql_error();
-    if (!mysql_select_db($cfg['mysql_db']))
-        return "cannot select default database";
+    if ($cfg['db_type'] == 'mysql') {
+        if (!function_exists('mysql_connect'))
+            return "mysql extension is not installed";
+        $dsn = $cfg['db_host'];
+        if ($cfg['db_port'] && $cfg['db_port'] !== '0')
+            $dsn .= ':' . $cfg['db_port'];
+        $dbh = @mysql_connect($dsn, $cfg['db_user'], $cfg['db_pass']);
+        if (!$dbh)
+            return "cannot connect to database: " . mysql_error();
+        if (!mysql_select_db($cfg['db_dbname']))
+            return "cannot select default database";
+        mysql_query('SET NAMED utf8', $dbh);
+    }
+    else if ($cfg['db_type'] == 'pgsql') {
+        if (!function_exists('pg_connect'))
+            return "postgresql extension is not installed";
+        $dsn = ' user=' . $cfg['db_user'] . ' password=' . $cfg['db_pass'] . ' host=' . $cfg['db_host'];
+        if ($cfg['db_port'] && $cfg['db_port'] !== '0')
+            $dsn .= ' port=' . $cfg['db_port'];
+        $prev_track = ini_get('track_errors');
+        ini_set('track_errors', 1);
+        $dbh = @pg_connect($dsn);
+        $pgsql_error = $dbh ? "" : $php_errormsg;
+        ini_set('track_errors', $prev_track);
+        if (!$dbh)
+            return "cannot connect to database [$dsn]: $pgsql_error";
+        pg_query($dbh, "set client_encoding=\"UTF8\"");
+    }
+    else {
+        return "invalid database type '".$cfg['db_type']."'";
+    }
     return "";
+}
+
+function db_close () {
+    global $cfg, $dbh;
+    if ($cfg['db_type'] == 'mysql' && function_exists('mysql_close') && $dbh)
+        @mysql_close($dbh);
+    if ($cfg['db_type'] == 'pgsql' && function_exists('pg_close') && $dbh)
+        @pg_close($dbh);
+    $dbh = null;
+}
+
+function db_query ($query) {
+    global $cfg, $dbh;
+    if ($cfg['db_type'] == 'mysql') {
+        $res = mysql_query($query, $dbh);
+    }
+    else if ($cfg['db_type'] == 'pgsql') {
+        $res = pg_query($dbh, $query);
+    }
+    else {
+        $res = FALSE;
+    }
+    return $res;
+}
+
+function db_fetch_array ($res) {
+    global $cfg, $dbh;
+    if ($res === FALSE)
+        return FALSE;
+    if ($cfg['db_type'] == 'mysql') {
+        $row = mysql_fetch_array($res, MYSQL_ASSOC);
+    }
+    else if ($cfg['db_type'] == 'pgsql') {
+        $row = pg_fetch_assoc($res);
+    }
+    else {
+        $row = FALSE;
+    }
+    return $row;
 }
 
 function setup_sort ($table, $columns) {
@@ -90,8 +158,8 @@ function table_query ($table, $db_table, $columns) {
 
 function table_fetch_all ($query, $columns) {
     $count = 0;
-    $res = mysql_query($query);
-    while ($row = mysql_fetch_array($res)) {
+    $res = db_query($query);
+    while ($row = db_fetch_array($res)) {
         $count++;
         $even_odd = $count & 1 ? "odd" : "even";
         echo "<tr class=\"$even_odd\">";
@@ -142,17 +210,16 @@ function show_users ($self) {
 }
 
 function netusher () {
-    global $dbh;
     $err = setup();
     if ($err) {
         echo "<p>$err</p>";
-        @mysql_close($dbh);
+        db_close();
         return;
     }
     $self = "index.php";
     show_users($self);
     show_hosts($self);
-    mysql_close($dbh);
+    db_close();
 }
 
 

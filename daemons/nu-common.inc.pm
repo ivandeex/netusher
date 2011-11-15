@@ -79,12 +79,13 @@ our %nu_config =
         nscd_pid_file       => "/var/run/nscd/nscd.pid",
         pam_debug           => 0,   # actually used by pam module
 
-        # server parameters (mysql)
-        mysql_host          => "localhost",
-        mysql_port          => 3306,
-        mysql_db            => undef,
-        mysql_user          => undef,
-        mysql_pass          => undef,
+        # server parameters (database)
+        db_type             => "mysql",
+        db_host             => "localhost",
+        db_port             => 0, # will make 3306 for mysql or 5432 for postgresql
+        db_dbname           => undef,
+        db_user             => undef,
+        db_pass             => undef,
 
         # server parameters (vpn)
         vpn_net             => undef,
