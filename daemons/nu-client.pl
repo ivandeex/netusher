@@ -14,6 +14,9 @@ require "$Bin/nu-groups.inc.pm";
 
 use IO::Socket::UNIX;
 
+my $PROG_SU = "/bin/su";
+my $PROG_CRON = "/usr/sbin/crond";
+
 #
 # require: perl-IO-Handle-Record and perl-Class-Member
 #
@@ -51,6 +54,11 @@ sub handle_unix_request ($$) {
     	$pkt =~ s/\s\S+$/ \*\*\*/ if $pkt =~ /^auth /;
     	debug("received \"%s\" from [%s]", $pkt, $chan->{addr});
     }
+
+    # ignore requests from cron
+    my ($dummy1, $dummy2, $prog) = split /:/, $chan->{addr};
+    return "local cron"
+        if $prog eq $PROG_CRON;
 
     rescan_etc();
 
@@ -614,7 +622,7 @@ sub unix_accept_pending () {
         addr => $addr
         };
 
-    if ($euid != 0 && $prog ne "/bin/su") {
+    if ($euid != 0 && $prog ne $PROG_SU && $prog ne $PROG_CRON) {
         info("reject connection from pid:$pid euid:$euid prog:$prog");
         ev_close($c_chan);
         return;

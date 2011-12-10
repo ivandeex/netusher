@@ -349,7 +349,7 @@ sub vpn_disconnected ($%) {
                     rx_bytes = COALESCE(?,rx_bytes),
                     tx_bytes = COALESCE(?,tx_bytes)
                 WHERE running = 1 AND vpn_ip = ?
-                AND   (? IS NULL OR beg_time = FROM_UNIXTIME(?))",
+                AND   (FROM_UNIXTIME(?) IS NULL OR beg_time = FROM_UNIXTIME(?))",
                 $arg{end_time}, $arg{rx_bytes}, $arg{tx_bytes},
                 $vpn_ip, $beg_time, $beg_time);
     db_commit();
@@ -789,18 +789,38 @@ sub db_clone () {
 
 sub db_execute ($@) {
     my ($sql, @params) = @_;
-    my $sth = $sth_cache{$sql};
-    unless (defined $sth) {
-        $sth = $dbh->prepare($sql);
-        $sth_cache{$sql} = $sth
-            if $nu_config{db_type} eq "mysql";
-    }
-    my $ok = { $sth->execute(@params) };
-    my $num = $sth->rows();
-    if (!$ok) {
-        info("database error: %s\n", $sth->errstr());
+    my ($sth, $ok, $num, $err);
+
+    while (1) {
+        # prepare
+        $sth = $sth_cache{$sql};
+        unless (defined $sth) {
+            $sth = $dbh->prepare($sql);
+            $sth_cache{$sql} = $sth
+                if $nu_config{db_type} eq "mysql";
+        }
+
+        # execute
+        $ok = eval { $sth->execute(@params) };
+        $num = $sth->rows();
+        $ok = 0 if $num < 0;
+        last if $ok;
+
+        # handle errors
         $num = -1;
+        $err = $sth->errstr();
+        info("database error: $err\n");
+        last if $err !~ /no connection/i;
+
+        # reconnect
+        while (1) {
+            info("reconnecting with database");
+            eval { db_connect(); };
+            last if $dbh;
+            sleep(5);
+        }
     }
+
     if ($nu_config{debug} & 2) {
         debug("execute: %s\n\t((%s)) = \"$num\"", $sql,
              join(',', map { defined($_) ? "\"$_\"" : "NULL" } @params));
