@@ -2,6 +2,7 @@
 # Simple script for sending OpenVPN status changes to nu-server daemon
 # $Id$
 
+IPV6_SCRIPT=/etc/vitki/openvpn/client-up-ipv6-openvpn.sh
 PID_FILE=/var/run/netusher/nu-server.pid
 EVENT_DIR=/var/run/netusher
 EVENT_FILE=openvpn-event
@@ -11,5 +12,7 @@ if [ -d $EVENT_DIR -a x"$RC_ACTION" != x"cron" ]; then
     env | sort > $EVENT_DIR/$EVENT_FILE.$STAMP 2>/dev/null
     [ -r $PID_FILE ] && kill -USR2 `< $PID_FILE` >/dev/null 2>&1
 fi
+
+[ -f $IPV6_SCRIPT ] && . $IPV6_SCRIPT
 
 exit 0
