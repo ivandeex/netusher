@@ -21,7 +21,7 @@ use EV;
 our ($config_file, $progname, %nu_config);
 our ($ev_loop, %ev_watch, $ev_reload);
 our ($ldap_child);
-our ($vpn_regex);
+our (@vpn_regex);
 
 our %nss = (
             name => "nss",
@@ -166,12 +166,15 @@ sub select_ip ($) {
     my $vpn_ip;
     for my $ip (split /,/, $ips) {
         return "bad ip" if $ip !~ m/^[1-9]\d{1,2}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-        next if $ip !~ $vpn_regex;
-        if (defined $vpn_ip) {
-            debug("duplicate vpn ip");
-            next;
+        for my $regex (@vpn_regex) {
+            if ($ip =~ $regex) {
+                if (defined $vpn_ip) {
+                    debug("duplicate vpn ip");
+                    next;
+                }
+                $vpn_ip = $ip;
+            }
         }
-        $vpn_ip = $ip;
     }
     return "foreign ip" unless $vpn_ip;
     #debug("client vpn ip: $vpn_ip");

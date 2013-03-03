@@ -20,7 +20,7 @@ our (%nu_config, $progname, %ev_watch, $ev_loop);
 # interaction with openvpn
 #
 
-our ($vpn_regex);
+our (@vpn_regex);
 my  (%vpn_session);
 
 
@@ -28,13 +28,16 @@ sub vpn_init () {
     vpn_close();
 
     # create regular expression for vpn network
-    $vpn_regex = $nu_config{vpn_net};
-    fail("vpn_net: invalid format \"$vpn_regex\", shall be A.B.C.0")
-        if $vpn_regex !~ /^[1-9]\d{1,2}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-    $vpn_regex =~ s/(\.0+)+$//;
-    $vpn_regex .= ".";
-    $vpn_regex =~ s/\./\\./g;
-    $vpn_regex = qr[$vpn_regex];
+    @vpn_regex = split /\s*,\s*/, $nu_config{vpn_net};
+    for my $i (0 .. $#vpn_regex) {
+        my $regex = $vpn_regex[$i];
+        fail("vpn_net: invalid format \"$regex\", shall be A.B.C.0")
+            if $regex !~ /^[1-9]\d{1,2}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+        $regex =~ s/(\.0+)+$//;
+        $regex .= ".";
+        $regex =~ s/\./\\./g;
+        $vpn_regex[$i] = qr[$regex];
+    }
 
     for my $path (@nu_config{qw[vpn_status_file vpn_event_dir vpn_archive_dir]}) {
         fail("$path: path must be absolute") if $path && $path !~ m!^/!;
@@ -569,7 +572,10 @@ sub iptables_rescan () {
             # simple rules for ordinary IPs
             if ($line =~ /^-A (\S+) -s ([\w\d\.\:]+) -j ACCEPT$/) {
                 my ($chain, $ip) = ($1, $2);
-                my $is_vpn = ($ip =~ $vpn_regex) ? 1 : 0;
+                my $is_vpn = 0;
+                for my $regex (@vpn_regex) {
+                    $is_vpn = 1 if $ip =~ $regex;
+                }
                 if ($is_vpn && chain_is_mode($chain, CHAIN_VPN)) {
                     $chains_ips{$chain}{$ip} = $source;
                     debug("ip scan source $source chain $chain vpn: $ip");
