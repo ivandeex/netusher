@@ -222,9 +222,11 @@ sub vpn_scan () {
     #
     # scan openvpn status file
     #
+    my %active_ip;
+    my $got_status;
+
     for my $path (split /\s*,\s*/, $nu_config{vpn_status_file}) {
         if ($path && open(my $file, $path)) {
-            my %active;
             while(<$file>) {
                 chomp(my $line = $_);
                 my ($tag, $cname, $real_ip_port, $vpn_ip,
@@ -256,24 +258,27 @@ sub vpn_scan () {
                     );
                 debug("vpn status line was: \"$line\"") if $modified;
 
-                $active{$vpn_ip} = 1;
+                $active_ip{$vpn_ip} = 1;
             }
             close($file);
-
-            # everyone beyond the list should be marked disconnected
-            for my $vpn_ip (sort keys %vpn_session) {
-                if (!$active{$vpn_ip}) {
-                    vpn_disconnected(
-                        "status",
-                        vpn_ip      => $vpn_ip,
-                        cname       => $vpn_session{$vpn_ip}{cname},
-                        real_ip     => $vpn_session{$vpn_ip}{real_ip},
-                        beg_time    => $vpn_session{$vpn_ip}{beg_time}
-                        );
-                }
-            }
         } else {
-            debug("$path: cannot read vpn status");
+            debug("$path: cannot read vpn status") if $path;
+        }
+        $got_status = 1;
+    }
+
+    if ($got_status) {
+        # everyone beyond the list should be marked disconnected
+        for my $vpn_ip (sort keys %vpn_session) {
+            if (!$active_ip{$vpn_ip}) {
+                vpn_disconnected(
+                    "status",
+                    vpn_ip      => $vpn_ip,
+                    cname       => $vpn_session{$vpn_ip}{cname},
+                    real_ip     => $vpn_session{$vpn_ip}{real_ip},
+                    beg_time    => $vpn_session{$vpn_ip}{beg_time}
+                    );
+            }
         }
     }
 }
