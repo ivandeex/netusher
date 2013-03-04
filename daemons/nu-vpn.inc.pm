@@ -39,14 +39,18 @@ sub vpn_init () {
         $vpn_regex[$i] = qr[$regex];
     }
 
-    for my $path (@nu_config{qw[vpn_status_file vpn_event_dir vpn_archive_dir]}) {
+    for my $path (@nu_config{qw[vpn_event_dir vpn_archive_dir]}) {
         fail("$path: path must be absolute") if $path && $path !~ m!^/!;
     }
 
-    # by default search for events in the status file directory
-    if ($nu_config{vpn_event_mask} && !$nu_config{vpn_event_dir}
-            && $nu_config{vpn_status_file} =~ m!^/!) {
-        ($nu_config{vpn_event_dir} = $nu_config{vpn_status_file}) =~ s!/+[^/]*$!!;
+    for my $path (split /\s*,\s*/, $nu_config{vpn_status_file}) {
+        if ($path) {
+            fail("$path: path must be absolute") if $path !~ m!^/!;
+            # by default search for events in the status file directory
+            if ($nu_config{vpn_event_mask} && !$nu_config{vpn_event_dir}) {
+                ($nu_config{vpn_event_dir} = $path) =~ s!/+[^/]*$!!; #!
+            }
+        }
     }
 
     if ($nu_config{vpn_scan_interval}) {
@@ -218,10 +222,8 @@ sub vpn_scan () {
     #
     # scan openvpn status file
     #
-    if ($nu_config{vpn_status_file}) {
-        my $path = $nu_config{vpn_status_file};
-
-        if (open(my $file, $path)) {
+    for my $path (split /\s*,\s*/, $nu_config{vpn_status_file}) {
+        if ($path && open(my $file, $path)) {
             my %active;
             while(<$file>) {
                 chomp(my $line = $_);
