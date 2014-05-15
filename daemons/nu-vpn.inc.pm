@@ -23,6 +23,12 @@ our (%nu_config, $progname, %ev_watch, $ev_loop);
 our (@vpn_regex);
 my  (%vpn_session);
 
+sub conv_cname ($) {
+    my $cname = shift;
+    $cname =~ s/^client-//;
+    $cname =~ s/\.vpn$//;
+    return $cname;
+}
 
 sub vpn_init () {
     vpn_close();
@@ -291,7 +297,7 @@ sub vpn_scan () {
 sub vpn_connected ($%) {
     my ($msg, %arg) = @_;
     my ($vpn_ip, $beg_time) = ($arg{vpn_ip}, $arg{beg_time});
-    $arg{cname} =~ s/^client-//;
+    my $cname = conv_cname($arg{cname});
     my $modified = 0;
 
     # remove previous sessions, if any
@@ -312,7 +318,7 @@ sub vpn_connected ($%) {
                 running=1, cname = COALESCE(?,cname),
                 rx_bytes = COALESCE(?,rx_bytes), tx_bytes = COALESCE(?,tx_bytes)
             WHERE vpn_ip = ? AND beg_time = FROM_UNIXTIME(?)",
-            $arg{end_time}, $arg{cname}, $arg{rx_bytes}, $arg{tx_bytes},
+            $arg{end_time}, $cname, $arg{rx_bytes}, $arg{tx_bytes},
             $vpn_ip, $beg_time);
     } else {
         # create new session
@@ -321,15 +327,15 @@ sub vpn_connected ($%) {
                 running,cname, real_ip,real_port,rx_bytes,tx_bytes)
             VALUES (?, FROM_UNIXTIME(?), COALESCE(FROM_UNIXTIME(?),NOW()),
                 1,?, ?,?,?,?)",
-            $vpn_ip, $beg_time, $arg{end_time},  $arg{cname},
+            $vpn_ip, $beg_time, $arg{end_time},  $cname,
             $arg{real_ip}, $arg{real_port}, $arg{rx_bytes}, $arg{tx_bytes});
 
         info("vpn $vpn_ip connected ($msg)");
         $vpn_session{$vpn_ip}{beg_time} = $beg_time;
         $vpn_session{$vpn_ip}{real_ip} = $arg{real_ip};
-        $vpn_session{$vpn_ip}{cname} = $arg{cname};
+        $vpn_session{$vpn_ip}{cname} = $cname;
         iptables_update($vpn_ip, 0, 1);
-        dyndns_update(1, $arg{real_ip}, $arg{cname});
+        dyndns_update(1, $arg{real_ip}, $cname);
         $modified = 1;
     }
 
@@ -345,7 +351,7 @@ sub vpn_connected ($%) {
 sub vpn_disconnected ($%) {
     my ($msg, %arg) = @_;
     my ($vpn_ip, $beg_time) = ($arg{vpn_ip}, $arg{beg_time});
-    $arg{cname} =~ s/^client-//;
+    my $cname = conv_cname($arg{cname});
     my $modified = 0;
 
     if ($beg_time && exists($vpn_session{$vpn_ip})
@@ -374,7 +380,7 @@ sub vpn_disconnected ($%) {
         }
         debug("$count vpn sessions still use real ip $arg{real_ip}");
         iptables_update($vpn_ip, 0, $count);
-        dyndns_update(0, $arg{real_ip}, $arg{cname});
+        dyndns_update(0, $arg{real_ip}, $cname);
         delete $vpn_session{$vpn_ip};
         $modified = 1;
     }
@@ -395,7 +401,7 @@ sub dyndns_update ($$$) {
     my ($enable, $real_ip, $cname) = @_;
     return unless $nu_config{ns_zone_real};
 
-    $cname =~ s/^client-//;
+    $cname =~ conv_cname($cname);
     my $host = "${cname}.$nu_config{ns_zone_real}";
 
     my $cmd = "server $nu_config{ns_server}\n";
