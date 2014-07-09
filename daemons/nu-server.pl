@@ -165,7 +165,7 @@ sub select_ip ($) {
     my ($ips) = @_;
     my $vpn_ip;
     for my $ip (split /,/, $ips) {
-        return "bad ip" if $ip !~ m/^[1-9]\d{1,2}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+        return "bad ip" if $ip !~ m/^[1-9]\d{0,2}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
         for my $regex (@vpn_regex) {
             if ($ip =~ $regex) {
                 if (defined $vpn_ip) {
