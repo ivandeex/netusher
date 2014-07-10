@@ -92,7 +92,11 @@ sub handle_server_reply ($$$) {
         unix_write_reply($job->{chan}, $reply);
     }
     if ($job->{info}) {
-        info($job->{info} . ": " . $reply);
+        if ($reply eq "success") {
+            debug($job->{info} . ": " . $reply);
+        } else {
+            info($job->{info} . ": " . $reply);
+        }
     }
     if ($groups && $nu_config{enable_gmirror} && !$nu_config{prefer_nss}) {
         if ($groups) {
@@ -298,7 +302,8 @@ sub logon_action ($) {
     # cannot find matching utmp record
     my $err;
     if (!$btime && ++ $job->{attempt} > $fix_attempts) {
-        info("$user $cmd: cannot find utmp record");
+        #info("$user $cmd: cannot find utmp record"); #FIXME!!
+        debug("$user $cmd: cannot find utmp record");
         $btime = $cmd eq "login" ? time() : "-";
         $err = "utmp not found";
     }
